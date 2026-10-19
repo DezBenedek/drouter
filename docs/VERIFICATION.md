@@ -1,17 +1,16 @@
 # Software verification
 
-Verified on macOS Apple Silicon on 2026-10-19. No Waveshare board or physical BirdDog receiver was available. No production deployment or physical flashing was performed.
+Verified on macOS Apple Silicon on 2026-10-19. No Waveshare board or physical BirdDog receiver was available. The Worker was subsequently deployed to Cloudflare; no physical flashing was performed.
 
 | Check | Result |
 | --- | --- |
 | `cargo fmt --all -- --check` | Passed |
-| `cargo test --workspace` | 15 tests passed: authentication, routing/readback, Wi-Fi policy, presets, persistence, limits, replay/expiry, validation and rollback |
+| `cargo test --workspace` | 24 tests passed: authentication, routing/readback, Wi-Fi policy, presets, persistence, limits, replay/expiry, validation and rollback |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Passed |
 | `cargo build -p drouter-simulator` | Passed on macOS |
-| `npm test --prefix cloud` | 4 Worker/protocol boundary tests passed |
+| `npm test --prefix cloud` | 9 Worker/protocol/localization tests passed |
 | `npm run build --prefix cloud` | TypeScript check and production React/Vite build passed |
-| `npm run ui --prefix cloud` | Vite started on 127.0.0.1:5173; transformed React module served successfully |
-| `npm run test:e2e --prefix cloud` | 23 integration checks passed against fresh real Wrangler and simulator processes, including Chromium |
+| `npm run test:e2e --prefix cloud` | 37 integration checks passed against fresh real Wrangler and simulator processes, including Chromium |
 | `npm audit --prefix cloud` | No known vulnerabilities reported in the locked dependency set |
 | `cargo +esp build --features esp --release --locked` inside `firmware/` | Xtensa ESP32-S3 release cross-build passed |
 | `./scripts/firmware-image.sh` | Merged 16 MB flash image generated; no USB device accessed |
@@ -22,31 +21,33 @@ The shared authentication crate intentionally emits both `rlib` and browser `cdy
 
 The runner provisions a new temporary device and exercises real HTTP control against two virtual BirdDog servers. It verifies:
 
-1. First-boot local provisioning without Cloudflare.
-2. Wi-Fi add, password redaction, reordering and invalid reorder rejection.
-3. Local source switching with actual mutable virtual decoder state and preset capture.
-4. Ignored switches fail readback verification.
-5. Automatic device registration with a real Durable Object.
-6. Wrong remote passwords are rejected.
-7. Browser-like native/WASM SRP client routes through the real relay.
-8. Ethernet failures reach the remote client.
-9. Presets expose partial output failures.
-10. BirdDog HTTP requests time out.
-11. Arbitrary HTTP-proxy operations are rejected by the device.
-12. Local routing survives Cloud disconnection.
-13. Cloud reconnection restores authenticated remote control.
-14. Real Chromium logs into the local and React UIs, routes real virtual-decoder state, captures screenshots and checks mobile overflow.
-15. Unauthenticated WebSockets cannot send application commands.
-16. Duplicate live device identities are rejected.
-17. The same device identity reconnects after disconnection.
-18. A deliberately unanswered relay request expires under the real alarm/deadline path.
-19. A different identity cannot spoof a device name.
-20. Invalid JSON and oversized requests are rejected.
-21. Presets and Wi-Fi order survive restart; current routing is read from receivers instead of automatically restored.
-22. Device identity survives simulator restart and reconnects.
-23. Local revocation prevents further remote commands.
+- The complete five-step mobile setup wizard, token-free first setup, optional Wi-Fi, finished screen, and entry into local Routing without Cloudflare.
+- Real mutable virtual BirdDog HTTP state, verified source changes, ignored switches, timeouts, offline outputs, Ethernet errors, preset capture, and partial preset failures.
+- Wi-Fi add/edit/password redaction, ordering, duplicate-order rejection, profile enablement, fallback/hysteresis, storage capacity, remote disconnect guards, and configuration migration. Native tests preserve old profile order, identity, and verifier.
+- Device-mediated SRP login through real Wrangler, wrong passwords, encrypted command authorization, replay/expiry/revocation, malformed JSON, message limits, and request deadlines.
+- Offline local control, cloud reconnection, simulator restart persistence, immutable device identity, and boot readback without forcing saved routes.
+- Signed SQLite registration, duplicate live identities, proof replay, name collision while the owner is offline, stable ID across renaming, protected old-name aliases, and device impersonation rejection.
+- Complete Worker restart with the same SQLite directory. Another valid identity remains unable to claim the original name, while the original device reconnects.
+- Inspection of the actual SQLite database: exactly the allowed device metadata columns and reserved aliases; no password, Wi-Fi secret, preset, or routing configuration payloads.
+- Password changes invalidate the previous password without changing the reserved identity. Local recovery imports the original identity, creates a new password verifier, preserves name ownership, and revokes remote sessions. Remote recovery-key export is rejected.
+- Real Chromium local and React UIs at 375, 430, 768, 1366, and 1920 pixels; three-source and 64-source routing; actual source selection through desktop crosspoints and mobile sheets; keyboard navigation/Escape; native settings navigation; preset confirmation; light/dark appearance; no viewport overflow, browser runtime errors, or CSP errors.
 
-The runner refuses occupied ports and terminates its owned process trees. Final verification used fresh relay/simulator processes and confirmed no listeners remained on 8080, 8787, 9001 or 9002. Browser screenshots are in `docs/screenshots/`.
+Modification 3 additionally verifies:
+
+- Saved-source creation, aliases, original identifiers, reordering, confirmed removal and cancellation; aliases and profiles survive an actual simulator restart.
+- Independent searchable Other source selectors route different outputs without saving unsaved sources. Desktop source rows/output columns and output-first mobile sheets operate against real simulated receivers.
+- Multiple distinct four-character Simple Mode passwords, profile selection, duplicate-password rejection, unique salts and Unicode scalar counting. Native tests cover supplementary-plane and combining characters, failed-proof backoff, expiration, replay and session limits.
+- Restricted local and relay sessions reject administrator operations, foreign button IDs and client-supplied target overrides. Fixed buttons verify actual receiver readback and reject double taps and unavailable targets.
+- Browser profile creation with multiple buttons, final confirmation, cancellation of disable/delete edits, separate restricted mobile interfaces, routing feedback and no administrator navigation.
+- Event Mode blocks existing and new restricted sessions locally and remotely; administrator routing remains available. Deactivation restores restricted actions and enabled profiles. Event Mode persists through process restart; missing/corrupt state locks access in native/storage tests.
+- Local Simple Mode operation during Cloudflare outages. Real SQLite inspection confirms no profile names, source aliases, passwords, presets or routing configuration were persisted by Cloudflare.
+- Hungarian and English local/remote login, reload persistence, profile labels retained as user content, Contact mailto links and actual Hungarian screenshots. Translation/protocol tests cover the complete dictionary and required workflow keys. Reduced-motion rules and long-label handling were inspected in the shared stylesheet.
+
+The simulator now uses an asynchronous device mutex for background network/relay tasks and blocking-lock acquisition only inside the blocking command executor. This fixes virtual receiver starvation during concurrent password hashing and relay/network polling; the complete integration runner includes the previously failing editor path.
+
+The 37 integration checks complement 24 native tests and nine Worker/protocol/localization tests. Desktop/mobile screenshots were inspected and refined for header density, source-search alignment, sheets, Wi-Fi list readability, and dark-mode consistency.
+
+The runner uses a temporary simulator and SQLite registry directory, refuses occupied ports and terminates its owned process trees. Token-free setup verification uses `DROUTER_TEST_PORT_OFFSET=10000` to run alongside the user’s simulator, with HTTP ports 18080/18787 and BirdDog ports 19001/19002. Browser screenshots are in `docs/screenshots/`.
 
 ## Toolchain snapshot
 
@@ -58,6 +59,15 @@ The runner refuses occupied ports and terminates its owned process trees. Final 
 - Node 22.23.2, TypeScript 5.9.3, React 19.3.1, Vite 7.3.7.
 - Wrangler 4.151.2, Vitest 5.0.5, Playwright 1.64.1.
 
-The final firmware application image is 1,746,080 bytes of its 7,340,032-byte slot (23.79%). `target/drouter-esp32s3.bin` is a merged 16 MB image with the configured bootloader and partition table. SHA-256: `bb98622ec34b514a7ce5c5b9ec92d8c8b8437a69f648a461e1450797c382d6c8`. Build products are ignored by version control and regenerated by the documented scripts.
+The final firmware application image is 1,885,056 bytes of its 7,340,032-byte slot (25.68%). `target/drouter-esp32s3.bin` is a merged 16 MB image with the configured bootloader and partition table. SHA-256: `7b118a02c74a36fd35a0a6c28814ba5ade2e99095e64a19c5f8634570fbbbf31`. Build products are ignored by version control and regenerated by the documented scripts.
 
-Physical SPI/PSRAM, DHCP/radio timing, NVS power-cut behavior, USB flashing, actual BirdDog interoperability, eFuse security provisioning and long-running stability remain unverified. See `HARDWARE-ACCEPTANCE.md`. API 1.0 and a universal physical BirdDog discovery mechanism are not advertised. Zero cloud account/reservation storage requires the documented self-certifying remote-name suffix. The production hostname is configured as a default but was not deployed or provisioned during this task.
+Physical SPI/PSRAM, DHCP/radio timing, NVS power-cut behavior, USB flashing, actual BirdDog interoperability, eFuse security provisioning and long-running stability remain unverified. See `HARDWARE-ACCEPTANCE.md`. API 1.0 and a universal physical BirdDog discovery mechanism are not advertised. The minimal SQLite registry permanently reserves friendly names; it has no password or account database. The production hostname is configured as a default but was not deployed or provisioned during this task.
+
+
+## Public Cloudflare deployment verification
+
+Deployed on 2026-10-19 to `https://drouter.dezbenedek.workers.dev`, version `7b8c6cce-70ea-471f-887f-67303686bc88`. Production build and Wrangler dry-run passed before publication. Public HTTPS returned 200 with the configured CSP and security headers.
+
+`DROUTER_LIVE_ORIGIN=https://drouter.dezbenedek.workers.dev node tests/live-relay-check.mjs` passed against an isolated localhost simulator and two real virtual BirdDog HTTP servers. It verified outbound device registration, public WSS administrator authentication, actual switch/readback, separate Simple Mode authentication, administrator API rejection, fixed-button routing, Event Mode blocking with administrator routing preserved, deactivation, and Chromium mobile login without viewport overflow or runtime errors.
+
+The temporary simulator and encrypted local state were removed. The minimal test-device registration `deploy-check-7f7711cf6e` remains reserved by design; no passwords, source definitions, actions or profile definitions were persisted in Cloudflare. The existing local device named `router` was left unchanged. `drouter.dezso.hu` still resolves to its previous server and was not reconfigured; its current TLS certificate does not match that hostname. Use the verified workers.dev origin until custom-domain routing is configured.

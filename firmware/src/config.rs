@@ -8,8 +8,8 @@ use std::net::Ipv4Addr;
 pub const MAX_RECEIVERS: usize = 16;
 pub const MAX_SOURCES: usize = 64;
 pub const MAX_PRESETS: usize = 16;
-pub const MAX_WIFI: usize = 8;
 pub const MAX_MESSAGE: usize = 32768;
+pub const MAX_WIFI_LIST_BYTES: usize = 13000;
 pub const DEFAULT_SERVER: &str = "https://drouter.dezso.hu";
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -17,6 +17,21 @@ pub struct WifiProfile {
     pub id: String,
     pub ssid: String,
     pub password: String,
+    #[serde(default = "enabled_default")]
+    pub enabled: bool,
+    #[serde(default = "priority_default")]
+    pub priority: u32,
+}
+impl WifiProfile {
+    pub fn public(&self) -> serde_json::Value {
+        serde_json::json!({"id":self.id,"ssid":self.ssid,"enabled":self.enabled,"priority":self.priority})
+    }
+}
+fn enabled_default() -> bool {
+    true
+}
+fn priority_default() -> u32 {
+    u32::MAX
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,8 +98,53 @@ pub struct Preset {
     pub routes: Vec<(String, String)>,
 }
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedSource {
+    pub id: String,
+    pub source: String,
+    pub original_name: String,
+    pub display_name: String,
+    pub order: u32,
+    pub available: bool,
+}
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SimpleAction {
+    pub id: String,
+    pub label: String,
+    pub icon: Option<String>,
+    pub receiver: String,
+    pub source: String,
+    pub enabled: bool,
+    pub order: u32,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SimpleProfile {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub credential: Credential,
+    pub enabled: bool,
+    pub order: u32,
+    pub actions: Vec<SimpleAction>,
+}
+impl SimpleProfile {
+    pub fn public(&self) -> serde_json::Value {
+        serde_json::json!({"id":self.id,"name":self.name,"description":self.description,"enabled":self.enabled,"order":self.order,"actions":self.actions})
+    }
+}
+fn locked_default() -> bool {
+    true
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     pub schema: u32,
+    #[serde(default)]
+    pub saved_sources: Vec<SavedSource>,
+    #[serde(default)]
+    pub simple_profiles: Vec<SimpleProfile>,
+    #[serde(default = "locked_default")]
+    pub event_mode: bool,
     pub revision: u64,
     pub name: String,
     pub credential: Credential,
@@ -106,7 +166,10 @@ impl Config {
             format!("drouter-srp-salt-v1:{fingerprint}").as_bytes(),
         ));
         Ok(Self {
-            schema: 1,
+            schema: 3,
+            saved_sources: vec![],
+            simple_profiles: vec![],
+            event_mode: false,
             revision: 1,
             name: normalize_name(name)?,
             credential: Credential::with_salt(password, &salt)?,
@@ -126,17 +189,34 @@ impl Config {
     pub fn public_key(&self) -> String {
         hex::encode(self.signing_key().verifying_key().as_bytes())
     }
+    pub fn device_id(&self) -> String {
+        hex::encode(Sha256::digest(
+            self.signing_key().verifying_key().as_bytes(),
+        ))
+    }
     pub fn remote_name(&self) -> String {
-        format!(
-            "{}--{}",
-            self.name,
-            hex::encode(&Sha256::digest(self.signing_key().verifying_key().as_bytes())[..16])
-        )
+        self.name.clone()
+    }
+    pub fn migrate(&mut self) -> Result<bool> {
+        if self.schema > 3 || self.schema == 0 {
+            bail!("Unsupported configuration schema");
+        }
+        let changed = self.schema < 3;
+        if changed {
+            if self.schema == 1 {
+                for (i, w) in self.wifi.iter_mut().enumerate() {
+                    w.priority = i as u32;
+                }
+            }
+            self.schema = 3;
+        }
+        self.wifi.sort_by_key(|w| w.priority);
+        self.validate()?;
+        Ok(changed)
     }
     pub fn validate(&self) -> Result<()> {
-        if self.schema != 1
+        if !(1..=3).contains(&self.schema)
             || normalize_name(&self.name)? != self.name
-            || self.wifi.len() > MAX_WIFI
             || self.receivers.len() > MAX_RECEIVERS
             || self.presets.len() > MAX_PRESETS
         {
@@ -150,14 +230,93 @@ impl Config {
         {
             bail!("Invalid credentials");
         }
+        if self.saved_sources.len() > MAX_SOURCES || self.simple_profiles.len() > 8 {
+            bail!("Configuration capacity exceeded");
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        let mut names = std::collections::BTreeSet::new();
+        for source in &self.saved_sources {
+            label(&source.display_name)?;
+            if source.id.is_empty()
+                || source.id.len() > 32
+                || source.source.is_empty()
+                || source.source.len() > 256
+                || source.original_name.len() > 256
+                || !ids.insert(&source.id)
+                || !names.insert(&source.source)
+            {
+                bail!("Invalid saved source");
+            }
+        }
+        if serde_json::to_vec(&self.saved_sources)?.len() > 13000 {
+            bail!("Saved sources exceed transport capacity");
+        }
+        if serde_json::to_vec(
+            &self
+                .simple_profiles
+                .iter()
+                .map(SimpleProfile::public)
+                .collect::<Vec<_>>(),
+        )?
+        .len()
+            > 13000
+        {
+            bail!("Simple Modes exceed transport capacity");
+        }
+        ids.clear();
+        for profile in &self.simple_profiles {
+            label(&profile.name)?;
+            if profile.id.is_empty()
+                || profile.id.len() > 32
+                || !ids.insert(&profile.id)
+                || profile.description.len() > 256
+                || !(1..=10).contains(&profile.actions.len())
+                || hex::decode(&profile.credential.salt)?.len() != 32
+                || profile.credential.verifier.is_empty()
+                || hex::decode(&profile.credential.verifier)?.len() > 256
+            {
+                bail!("Invalid Simple Mode profile");
+            }
+            let mut buttons = std::collections::BTreeSet::new();
+            for action in &profile.actions {
+                label(&action.label)?;
+                if action.id.is_empty()
+                    || action.id.len() > 32
+                    || !buttons.insert(&action.id)
+                    || action.receiver.len() > 32
+                    || action.source.is_empty()
+                    || action.source.len() > 256
+                    || action.icon.as_ref().is_some_and(|i| i.len() > 32)
+                {
+                    bail!("Invalid Simple Mode action");
+                }
+            }
+        }
         self.ethernet.validate()?;
         if !(60..=3600).contains(&self.wifi_policy.preferred_check_secs)
             || !(5..=120).contains(&self.wifi_policy.retry_secs)
         {
             bail!("Invalid Wi-Fi timers");
         }
+        let mut ids = std::collections::BTreeSet::new();
         for p in &self.wifi {
             validate_wifi(p)?;
+            if !ids.insert(&p.id) {
+                bail!("Duplicate Wi-Fi profile ID");
+            }
+        }
+        crate::storage::validate_size(&serde_json::to_vec(self)?)?;
+        if serde_json::to_vec(
+            &self
+                .wifi
+                .iter()
+                .map(WifiProfile::public)
+                .collect::<Vec<_>>(),
+        )?
+        .len()
+            > MAX_WIFI_LIST_BYTES
+        {
+            bail!("Wi-Fi profile list exceeds transport capacity");
         }
         Ok(())
     }

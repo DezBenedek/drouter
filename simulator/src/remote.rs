@@ -17,32 +17,33 @@ pub async fn run(shared: Shared) {
             shared
                 .device
                 .lock()
-                .unwrap()
+                .await
                 .config
                 .clone()
                 .filter(|c| c.cloud_enabled)
         };
         let Some(config) = config else {
-            shared.device.lock().unwrap().network.cloud = "disabled".into();
+            shared.device.lock().await.network.cloud = "disabled".into();
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         };
         if !shared.cloud_up.load(std::sync::atomic::Ordering::Relaxed)
-            || !shared.device.lock().unwrap().network.online()
+            || !shared.device.lock().await.network.online()
         {
-            shared.device.lock().unwrap().network.cloud = "offline".into();
+            shared.device.lock().await.network.cloud = "offline".into();
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
         let name = config.remote_name();
         let url = format!(
-            "{}/relay/{name}/device",
+            "{}/relay/{}/device",
             config
                 .server
                 .replacen("https://", "wss://", 1)
-                .replacen("http://", "ws://", 1)
+                .replacen("http://", "ws://", 1),
+            config.device_id()
         );
-        shared.device.lock().unwrap().network.cloud = "connecting".into();
+        shared.device.lock().await.network.cloud = "connecting".into();
         let limits = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE))
             .max_frame_size(Some(MAX_MESSAGE));
@@ -59,7 +60,7 @@ pub async fn run(shared: Shared) {
             loop {
                 tokio::select! {
                     _ = timer.tick() => {
-                        let valid = { let d = shared.device.lock().unwrap(); d.config.as_ref().is_some_and(|c| c.cloud_enabled && c.remote_name() == name && c.server == config.server) && d.network.online() };
+                        let valid = { let d = shared.device.lock().await; d.config.as_ref().is_some_and(|c| c.cloud_enabled && c.remote_name() == name && c.device_id() == config.device_id() && c.server == config.server) && d.network.online() };
                         if !valid || !shared.cloud_up.load(std::sync::atomic::Ordering::Relaxed) || !registered && connected.elapsed().as_secs() > 10 { let _ = ws.close(None).await; break; }
                         if registered && connected.elapsed().as_secs() > 30 { backoff.reset(); }
                     },
@@ -70,15 +71,16 @@ pub async fn run(shared: Shared) {
                                 let Ok(v) = serde_json::from_str::<Value>(&text) else { break; };
                                 let outgoing = match v["type"].as_str() {
                                     Some("challenge") => Some(registration(&config, v["nonce"].as_str().unwrap_or(""))),
-                                    Some("registered") => { registered = true; shared.device.lock().unwrap().network.cloud = "connected".into(); None },
+                                    Some("registered") => { registered=true;let mut d=shared.device.lock().await;d.network.cloud="connected".into();d.network.registered_name=v["name"].as_str().map(str::to_string);d.network.last_cloud_connection=Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());None },
+                                    Some("registration.error") => {shared.device.lock().await.network.cloud="name_unavailable".into(); None},
                                     Some("forward") if registered => {
                                         let Some(sid) = v["sid"].as_str().filter(|s| s.len() == 36) else { break; };
                                         if remote_sessions.len()<8 {remote_sessions.insert(sid.to_string());}
                                         let shared2 = shared.clone(); let sid2 = sid.to_string(); let frame = v["frame"].clone();
-                                        let reply = tokio::task::spawn_blocking(move || shared2.device.lock().unwrap().frame(&sid2,frame,true)).await;
+                                        let reply = tokio::task::spawn_blocking(move || shared2.device.blocking_lock().frame(&sid2,frame,true)).await;
                                         reply.ok().map(|frame| json!({"type":"reply","sid":sid,"frame":frame}))
                                     },
-                                    Some("leave") => { if let Some(sid) = v["sid"].as_str() { shared.device.lock().unwrap().auth.remove(sid); remote_sessions.remove(sid); } None },
+                                    Some("leave") => { if let Some(sid) = v["sid"].as_str() { shared.device.lock().await.auth.remove(sid); remote_sessions.remove(sid); } None },
                                     _ => None,
                                 };
                                 if let Some(outgoing) = outgoing { if ws.send(Message::text(outgoing.to_string())).await.is_err() { break; } }
@@ -91,15 +93,17 @@ pub async fn run(shared: Shared) {
                 }
             }
             {
-                let mut d = shared.device.lock().unwrap();
+                let mut d = shared.device.lock().await;
                 for sid in remote_sessions {
                     d.auth.remove(&sid);
                 }
             }
         }
         {
-            let mut d = shared.device.lock().unwrap();
-            d.network.cloud = "offline".into();
+            let mut d = shared.device.lock().await;
+            if d.network.cloud != "name_unavailable" {
+                d.network.cloud = "offline".into();
+            }
         }
         tokio::time::sleep(Duration::from_secs(backoff.next_delay())).await;
     }

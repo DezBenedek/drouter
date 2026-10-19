@@ -42,10 +42,10 @@ impl Default for VirtualReceiver {
     }
 }
 pub type Virtual = Arc<Mutex<VirtualReceiver>>;
-pub fn receiver(port: u16) -> Receiver {
+pub fn receiver(port: u16, index: usize) -> Receiver {
     Receiver {
         id: format!("virtual-{port}"),
-        label: format!("BirdDog {}", port - 9000),
+        label: format!("BirdDog {}", index + 1),
         ip: Ipv4Addr::LOCALHOST,
         port,
         channel: 1,
@@ -173,6 +173,11 @@ impl BirdDog for HttpBirdDog {
         Ok(serde_json::from_slice(&data)?)
     }
     fn discover(&mut self) -> Result<Vec<Receiver>> {
-        Ok(self.virtual_ports.iter().map(|p| receiver(*p)).collect())
+        Ok(self
+            .virtual_ports
+            .iter()
+            .enumerate()
+            .map(|(index, p)| receiver(*p, index))
+            .collect())
     }
 }

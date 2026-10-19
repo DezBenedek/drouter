@@ -24,7 +24,7 @@ impl WifiState {
         let is_available = |id: &str| {
             profiles
                 .iter()
-                .any(|p| p.id == id && available.contains(&p.ssid))
+                .any(|p| p.id == id && p.enabled && available.contains(&p.ssid))
         };
         if self.active.as_deref().is_some_and(|a| !is_available(a)) {
             self.active = None;
@@ -37,12 +37,14 @@ impl WifiState {
             }
             self.next_attempt = now + policy.retry_secs;
             let requested = self.requested.take();
-            let preferred = profiles
-                .iter()
-                .find(|p| Some(&p.id) == requested.as_ref() && available.contains(&p.ssid));
-            if let Some(p) =
-                preferred.or_else(|| profiles.iter().find(|p| available.contains(&p.ssid)))
-            {
+            let preferred = profiles.iter().find(|p| {
+                Some(&p.id) == requested.as_ref() && p.enabled && available.contains(&p.ssid)
+            });
+            if let Some(p) = preferred.or_else(|| {
+                profiles
+                    .iter()
+                    .find(|p| p.enabled && available.contains(&p.ssid))
+            }) {
                 self.active = Some(p.id.clone());
                 self.connected_since = now;
                 return self.active.clone();
@@ -60,7 +62,7 @@ impl WifiState {
         let preferred = profiles
             .iter()
             .take_while(|p| Some(&p.id) != self.active.as_ref())
-            .find(|p| available.contains(&p.ssid));
+            .find(|p| p.enabled && available.contains(&p.ssid));
         if let Some(p) = preferred {
             let count = if self.candidate.as_ref().is_some_and(|(id, _)| id == &p.id) {
                 self.candidate.as_ref().unwrap().1 + 1
@@ -101,6 +103,8 @@ mod tests {
                 id: s.to_string(),
                 ssid: s.to_string(),
                 password: "password12".into(),
+                enabled: true,
+                priority: 0,
             })
             .collect()
     }
@@ -129,6 +133,45 @@ mod tests {
         assert_eq!(
             w.choose(&p, &["Backup".into()], &policy, 617, false),
             Some("Backup".into())
+        );
+    }
+}
+#[cfg(test)]
+mod enabled_tests {
+    use super::*;
+    #[test]
+    fn disabled_preferred_network_is_skipped_without_probing_disconnects() {
+        let mut p = vec![
+            WifiProfile {
+                id: "a".into(),
+                ssid: "A".into(),
+                password: "password12".into(),
+                enabled: false,
+                priority: 0,
+            },
+            WifiProfile {
+                id: "b".into(),
+                ssid: "B".into(),
+                password: "password12".into(),
+                enabled: true,
+                priority: 1,
+            },
+        ];
+        let mut w = WifiState::default();
+        let policy = WifiPolicy::default();
+        let available = vec!["A".into(), "B".into()];
+        assert_eq!(
+            w.choose(&p, &available, &policy, 0, false),
+            Some("b".into())
+        );
+        assert_eq!(w.choose(&p, &available, &policy, 300, false), None);
+        assert_eq!(w.active.as_deref(), Some("b"));
+        p[0].enabled = true;
+        assert_eq!(w.choose(&p, &available, &policy, 600, false), None);
+        assert_eq!(w.active.as_deref(), Some("b"));
+        assert_eq!(
+            w.choose(&p, &available, &policy, 900, false),
+            Some("a".into())
         );
     }
 }

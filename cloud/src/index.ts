@@ -1,7 +1,10 @@
-import { remoteName } from "./auth";
+import { remoteName, hex } from "./auth";
+import { registry, type DeviceRecord } from "./registry";
+export { DeviceRegistry } from "./registry";
 export { RouterRelay } from "./durable-object";
 export interface Env {
   ROUTERS: DurableObjectNamespace;
+  REGISTRY: DurableObjectNamespace;
   ASSETS: Fetcher;
   DEV_ORIGIN?: string;
 }
@@ -10,7 +13,12 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/relay/")) {
       const match = /^\/relay\/([^/]+)\/(device|browser)$/.exec(url.pathname);
-      if (!match || !remoteName.test(match[1]))
+      if (
+        !match ||
+        !(match[2] === "device"
+          ? /^[a-f0-9]{64}$/.test(match[1])
+          : remoteName.test(match[1]))
+      )
         return new Response("Unavailable", { status: 404 });
       const origin = request.headers.get("Origin");
       if (
@@ -19,8 +27,28 @@ export default {
         !(url.hostname === "127.0.0.1" && origin === env.DEV_ORIGIN)
       )
         return new Response("Unavailable", { status: 403 });
-      const id = env.ROUTERS.idFromName(match[1]);
-      return env.ROUTERS.get(id).fetch(request);
+      let deviceId = match[1];
+      if (match[2] === "browser") {
+        const lookup = await registry(env).fetch(
+          `https://registry.internal/lookup?name=${match[1]}`,
+        );
+        const record = (await lookup.json()) as DeviceRecord | null;
+        deviceId =
+          record?.device_id ||
+          hex(
+            await crypto.subtle.digest(
+              "SHA-256",
+              new TextEncoder().encode(`absent:${match[1]}`),
+            ),
+          );
+      }
+      const internal = new URL(request.url);
+      internal.pathname = `/relay/${deviceId}/${match[2]}`;
+      const headers = new Headers(request.headers);
+      headers.set("X-DRouter-Name", match[1]);
+      return env.ROUTERS.get(env.ROUTERS.idFromName(deviceId)).fetch(
+        new Request(internal, { method: request.method, headers }),
+      );
     }
     const response = await env.ASSETS.fetch(request);
     const headers = new Headers(response.headers);

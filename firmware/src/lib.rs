@@ -15,3 +15,5 @@ mod tests;
 pub mod watchdog;
 pub mod web;
 pub mod wifi;
+
+mod management;

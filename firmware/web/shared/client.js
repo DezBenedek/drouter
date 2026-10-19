@@ -23,6 +23,8 @@ export class Client {
     this.onDisconnect = () => {};
   }
   async open(name, password, remote = true, origin = location.origin) {
+    if (Array.from(password).length < 4 || Array.from(password).length > 128)
+      throw new Error("Password must contain 4–128 Unicode characters");
     loaded ||= init();
     await loaded;
     if (remote) {
@@ -69,11 +71,18 @@ export class Client {
       const challenge = await this.exchange({
         type: "auth.start",
         a: login.public_key(),
+        multi: true,
       });
       if (challenge.type !== "auth.challenge")
         throw new Error("Unable to connect. Check device name and password.");
       const proof = login.respond(password, challenge.salt, challenge.b);
-      const result = await this.exchange({ type: "auth.proof", proof });
+      const proofs = [
+        proof,
+        ...(challenge.alternatives || []).map((c) =>
+          login.respond(password, c.salt, c.b),
+        ),
+      ];
+      const result = await this.exchange({ type: "auth.proof", proof, proofs });
       const key = result.type === "auth.ok" ? login.finish(result.proof) : "";
       if (!key)
         throw new Error("Unable to connect. Check device name and password.");
@@ -126,6 +135,15 @@ export class Client {
     return response.json();
   }
   call(op, params = {}) {
+    if (
+      (op === "settings.update" || op === "auth.password.change") &&
+      params.password !== undefined &&
+      (Array.from(params.password).length < 4 ||
+        Array.from(params.password).length > 128)
+    )
+      return Promise.reject(
+        new Error("Password must contain 4–128 Unicode characters"),
+      );
     const work = this.serial.then(() => this.request(op, params));
     this.serial = work.catch(() => {});
     return work;
@@ -181,10 +199,38 @@ export class Client {
       this.onDisconnect();
       throw e;
     }
-    if (!reply.ok) throw new Error(reply.error.message);
+    if (!reply.ok) {
+      const error = new Error(reply.error.message);
+      error.code = reply.error.code;
+      throw error;
+    }
     return reply.result;
   }
   close() {
+    if (this.key && !this.ws) {
+      const seq = ++this.seq;
+      const payload = encoder.encode(
+        JSON.stringify({
+          v: 1,
+          id: String(seq),
+          op: "auth.logout",
+          params: {},
+        }),
+      );
+      void this.crypt(true, false, seq, payload)
+        .then((data) =>
+          fetch("/api", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sid: this.sid,
+              frame: { type: "rpc", seq, data: hex(data) },
+            }),
+            keepalive: true,
+          }),
+        )
+        .catch(() => {});
+    }
     this.key?.fill(0);
     this.key = null;
     if (this.ws && this.ws.readyState < 2) this.ws.close();

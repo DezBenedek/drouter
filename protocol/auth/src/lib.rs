@@ -33,8 +33,8 @@ impl Credential {
         if salt.len() != 64 || hex::decode(salt)?.len() != 32 {
             bail!("Invalid salt");
         }
-        if password.len() < 12 || password.len() > 128 {
-            bail!("Password must contain 12–128 bytes");
+        if !(4..=128).contains(&password.chars().count()) {
+            bail!("Password must contain 4–128 Unicode characters");
         }
         let salt = salt.to_owned();
         let mut p = stretched(password, &hex::decode(&salt)?);
@@ -44,6 +44,9 @@ impl Credential {
             salt,
             verifier: hex::encode(v),
         })
+    }
+    pub fn matches(&self, password: &str) -> bool {
+        Self::with_salt(password, &self.salt).is_ok_and(|c| c.verifier == self.verifier)
     }
     pub fn begin(&self, a: &str) -> Result<(String, SrpServerVerifier<Sha256>)> {
         if a.len() > 512 {
@@ -64,7 +67,7 @@ pub struct Login {
     secret: Vec<u8>,
     public: Vec<u8>,
     key: Vec<u8>,
-    verifier: Option<srp::client::SrpClientVerifier<Sha256>>,
+    verifier: Vec<srp::client::SrpClientVerifier<Sha256>>,
 }
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 impl Login {
@@ -79,7 +82,7 @@ impl Login {
             secret,
             public,
             key: vec![],
-            verifier: None,
+            verifier: vec![],
         }
     }
     pub fn public_key(&self) -> String {
@@ -89,15 +92,15 @@ impl Login {
         self.try_respond(password, salt, b).unwrap_or_default()
     }
     pub fn finish(&self, proof: &str) -> String {
-        if self.verifier.as_ref().is_some_and(|v| {
-            hex::decode(proof)
-                .ok()
-                .is_some_and(|p| v.verify_server(&p).is_ok())
-        }) {
-            hex::encode(&self.key)
-        } else {
-            String::new()
-        }
+        self.verifier
+            .iter()
+            .find_map(|v| {
+                hex::decode(proof)
+                    .ok()
+                    .filter(|p| v.verify_server(p).is_ok())
+                    .map(|_| hex::encode(v.key()))
+            })
+            .unwrap_or_default()
     }
 }
 impl Default for Login {
@@ -118,7 +121,7 @@ impl Login {
         p.zeroize();
         self.key = result.key().to_vec();
         let proof = result.proof().to_vec();
-        self.verifier = Some(result);
+        self.verifier.push(result);
         Ok(hex::encode(proof))
     }
 }

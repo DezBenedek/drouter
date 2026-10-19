@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
+import { registry, type DeviceRecord } from "./registry";
 import { verifyRegistration } from "./auth";
 import { parseFrame, validClientFrame } from "./relay";
 type Attachment = {
   role: "candidate" | "device" | "browser";
   name: string;
+  deviceId: string;
   sid: string;
   nonce: string;
   expires: number;
@@ -52,7 +54,8 @@ export class RouterRelay extends DurableObject<Env> {
     const now = Date.now();
     const a: Attachment = {
       role: role === "device" ? "candidate" : "browser",
-      name,
+      name: request.headers.get("X-DRouter-Name") || name,
+      deviceId: name,
       sid: crypto.randomUUID(),
       nonce: crypto.randomUUID(),
       expires: now + 30000,
@@ -90,17 +93,47 @@ export class RouterRelay extends DurableObject<Env> {
       ws.serializeAttachment(a);
       const frame = parseFrame(message);
       if (a.role === "candidate") {
+        if (a.stage !== "new" || frame.type !== "register")
+          throw new Error("Unavailable");
+        a.stage = "verifying";
+        ws.serializeAttachment(a);
         if (
-          frame.type !== "register" ||
-          !(await verifyRegistration(a.name, a.nonce, frame)) ||
+          !(await verifyRegistration(a.deviceId, a.nonce, frame)) ||
           this.device()
         )
           throw new Error("Unavailable");
+        const reservation = await registry(this.env).fetch(
+          "https://registry.internal/reserve",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              deviceId: a.deviceId,
+              name: frame.name,
+              publicKey: frame.publicKey,
+            }),
+          },
+        );
+        if (!reservation.ok) {
+          this.send(ws, {
+            type: "registration.error",
+            code: "name_unavailable",
+          });
+          ws.close(1008, "Name unavailable");
+          return;
+        }
+        if (this.device()) throw new Error("Unavailable");
+        const record = (await reservation.json()) as DeviceRecord;
+        a.name = record.name;
         a.role = "device";
         a.expires = now + 24 * 3600000;
         a.nonce = "";
         ws.serializeAttachment(a);
-        this.send(ws, { type: "registered" });
+        this.send(ws, {
+          type: "registered",
+          name: record.name,
+          deviceId: record.device_id,
+          registeredAt: record.registered_at,
+        });
         this.ctx.setWebSocketAutoResponse(
           new WebSocketRequestResponsePair(
             '{"type":"ping"}',
@@ -124,7 +157,7 @@ export class RouterRelay extends DurableObject<Env> {
             const digest = await crypto.subtle.digest(
               "SHA-256",
               new TextEncoder().encode(
-                `drouter-srp-salt-v1:${a.name.slice(-32)}`,
+                `drouter-srp-salt-v1:${a.deviceId.slice(0, 32)}`,
               ),
             );
             const salt = Array.from(new Uint8Array(digest), (x) =>

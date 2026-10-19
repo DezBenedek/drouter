@@ -5,6 +5,9 @@ pub struct NetworkState {
     pub ethernet: EthernetState,
     pub wifi: WifiState,
     pub cloud: String,
+    pub registered_name: Option<String>,
+    pub last_cloud_connection: Option<u64>,
+    pub available_wifi: Vec<String>,
     pub free_memory: usize,
 }
 impl NetworkState {

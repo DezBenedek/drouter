@@ -27,6 +27,12 @@ export function validClientFrame(frame: Frame, stage: string): boolean {
     return (
       frame.type === "auth.proof" &&
       typeof frame.proof === "string" &&
+      (frame.proofs === undefined ||
+        (Array.isArray(frame.proofs) &&
+          frame.proofs.length <= 9 &&
+          frame.proofs.every(
+            (p) => typeof p === "string" && /^[a-f0-9]{64}$/i.test(p),
+          ))) &&
       /^[a-f0-9]{64}$/i.test(frame.proof)
     );
   return (

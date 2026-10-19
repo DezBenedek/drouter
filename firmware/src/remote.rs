@@ -3,9 +3,10 @@ use ed25519_dalek::Signer;
 use rand::Rng;
 use serde_json::{json, Value};
 pub fn registration(config: &Config, challenge: &str) -> Value {
-    let name = config.remote_name();
-    let message = format!("drouter-register-v1\n{name}\n{challenge}");
-    json!({"type":"register","name":name,"publicKey":config.public_key(),"signature":hex::encode(config.signing_key().sign(message.as_bytes()).to_bytes())})
+    let name = &config.name;
+    let device_id = config.device_id();
+    let message = format!("drouter-register-v2\n{device_id}\n{name}\n{challenge}");
+    json!({"type":"register","name":name,"deviceId":device_id,"publicKey":config.public_key(),"signature":hex::encode(config.signing_key().sign(message.as_bytes()).to_bytes())})
 }
 #[derive(Default)]
 pub struct Backoff {

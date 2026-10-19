@@ -28,7 +28,7 @@ use std::{
 };
 #[derive(Clone)]
 pub struct Shared {
-    device: Arc<Mutex<Device>>,
+    device: Arc<tokio::sync::Mutex<Device>>,
     virtuals: Vec<bird_dog::Virtual>,
     available_wifi: Arc<Mutex<Vec<String>>>,
     ethernet_up: Arc<AtomicBool>,
@@ -39,21 +39,19 @@ pub struct Shared {
 async fn main() -> Result<()> {
     let root = std::env::var("DROUTER_STATE").unwrap_or(".drouter-state".into());
     let store = storage::FileStorage::open(root)?;
-    let setup_token =
-        std::env::var("DROUTER_SETUP_TOKEN").unwrap_or_else(|_| drouter_auth::random_hex(16));
+    let bird_port: u16 = std::env::var("DROUTER_BIRDDOG_PORT_BASE")
+        .unwrap_or("9001".into())
+        .parse()?;
+    anyhow::ensure!(
+        (1..65535).contains(&bird_port),
+        "Invalid virtual BirdDog base port"
+    );
+    let bird_ports = [bird_port, bird_port + 1];
     let ethernet_up = Arc::new(AtomicBool::new(true));
-    let bird_api = bird_dog::HttpBirdDog::new(vec![9001, 9002], ethernet_up.clone());
-    let device = Device::new(
-        Box::new(store),
-        Box::new(bird_api),
-        setup_token.clone(),
-        true,
-    )?;
-    if device.config.is_none() {
-        println!("Physical provisioning token: {setup_token}");
-    }
+    let bird_api = bird_dog::HttpBirdDog::new(bird_ports.to_vec(), ethernet_up.clone());
+    let device = Device::new(Box::new(store), Box::new(bird_api), true)?;
     let mut virtuals = vec![];
-    for port in [9001, 9002] {
+    for port in bird_ports {
         let s = Arc::new(Mutex::new(bird_dog::VirtualReceiver::default()));
         virtuals.push(s.clone());
         tokio::spawn(async move {
@@ -63,7 +61,7 @@ async fn main() -> Result<()> {
         });
     }
     let shared = Shared {
-        device: Arc::new(Mutex::new(device)),
+        device: Arc::new(tokio::sync::Mutex::new(device)),
         virtuals,
         available_wifi: Arc::new(Mutex::new(vec![
             "School-WiFi".into(),
@@ -79,7 +77,8 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             {
-                let mut d = network.device.lock().unwrap();
+                let mut d = network.device.lock().await;
+                d.network.available_wifi = network.available_wifi.lock().unwrap().clone();
                 if let Some(c) = d.config.clone() {
                     let now = d.now();
                     let busy = d.last_operation.elapsed() < Duration::from_secs(5);
@@ -109,6 +108,7 @@ async fn main() -> Result<()> {
         .route("/assets/{*file}", get(asset))
         .route("/bootstrap", get(bootstrap))
         .route("/setup", post(setup))
+        .route("/setup/network", post(setup_network))
         .route("/session", post(session))
         .route("/api", post(api))
         .route("/ws", get(ws))
@@ -170,7 +170,7 @@ async fn asset_file(file: &str) -> Response {
     }
 }
 async fn bootstrap(State(s): State<Shared>) -> Json<Value> {
-    let d = s.device.lock().unwrap();
+    let d = s.device.lock().await;
     Json(json!({"setup":d.config.is_none(),"name":d.config.as_ref().map(|c| &c.name)}))
 }
 fn local_origin(headers: &HeaderMap) -> bool {
@@ -187,7 +187,7 @@ async fn setup(State(s): State<Shared>, headers: HeaderMap, Json(setup): Json<Se
     if !local_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    tokio::task::spawn_blocking(move || match s.device.lock().unwrap().setup(setup) {
+    tokio::task::spawn_blocking(move || match s.device.blocking_lock().setup(setup) {
         Ok(v) => Json(v).into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
@@ -197,6 +197,19 @@ async fn setup(State(s): State<Shared>, headers: HeaderMap, Json(setup): Json<Se
     })
     .await
     .unwrap()
+}
+async fn setup_network(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    Json(_v): Json<Value>,
+) -> Response {
+    if !local_origin(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    match s.device.lock().await.setup_network() {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::CONFLICT, Json(json!({"error":e.to_string()}))).into_response(),
+    }
 }
 async fn session(headers: HeaderMap) -> Response {
     if !local_origin(&headers) {
@@ -220,12 +233,8 @@ async fn api(State(s): State<Shared>, headers: HeaderMap, Json(v): Json<Value>) 
     };
     tokio::task::spawn_blocking(move || {
         let _permit = _permit;
-        let mut device = s.device.lock().unwrap();
-        let configured = device.config.is_some();
+        let mut device = s.device.blocking_lock();
         let reply = device.frame(&sid, v["frame"].clone(), false);
-        if configured && device.config.is_none() {
-            println!("Physical provisioning token: {}", device.setup_token);
-        }
         Json(reply).into_response()
     })
     .await
@@ -264,13 +273,8 @@ async fn socket_loop(mut socket: WebSocket, s: Shared, _permit: tokio::sync::Own
             let s2 = s.clone();
             let sid2 = sid.clone();
             let reply = tokio::task::spawn_blocking(move || {
-                let mut device = s2.device.lock().unwrap();
-                let configured = device.config.is_some();
-                let reply = device.frame(&sid2, v, false);
-                if configured && device.config.is_none() {
-                    println!("Physical provisioning token: {}", device.setup_token);
-                }
-                reply
+                let mut device = s2.device.blocking_lock();
+                device.frame(&sid2, v, false)
             })
             .await
             .unwrap();
@@ -285,7 +289,7 @@ async fn socket_loop(mut socket: WebSocket, s: Shared, _permit: tokio::sync::Own
             break;
         }
     }
-    s.device.lock().unwrap().auth.remove(&sid);
+    s.device.lock().await.auth.remove(&sid);
 }
 async fn faults(State(s): State<Shared>, headers: HeaderMap, Json(v): Json<Value>) -> Response {
     let token = std::env::var("DROUTER_SIM_CONTROL").unwrap_or_default();
@@ -307,12 +311,25 @@ async fn faults(State(s): State<Shared>, headers: HeaderMap, Json(v): Json<Value
         *s.available_wifi.lock().unwrap() = wifi
             .iter()
             .filter_map(|x| x.as_str().map(str::to_string))
-            .take(8)
+            .take(64)
             .collect();
     }
     if let Some(index) = v["receiver"].as_u64() {
         if let Some(state) = s.virtuals.get(index as usize) {
             let mut state = state.lock().unwrap();
+            if let Some(sources) = v["sources"].as_array() {
+                if sources.len() > 64
+                    || sources
+                        .iter()
+                        .any(|s| s.as_str().is_none_or(|s| s.is_empty() || s.len() > 256))
+                {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                state.sources = sources
+                    .iter()
+                    .map(|s| s.as_str().unwrap().to_string())
+                    .collect();
+            }
             if let Some(online) = v["online"].as_bool() {
                 state.online = online;
             }

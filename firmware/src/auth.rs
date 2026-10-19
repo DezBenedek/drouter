@@ -12,11 +12,19 @@ use std::collections::BTreeMap;
 use zeroize::Zeroize;
 mod srp_state {
     pub struct Pending {
-        pub state: srp::server::SrpServerVerifier<sha2::Sha256>,
+        pub states: Vec<(super::Role, srp::server::SrpServerVerifier<sha2::Sha256>)>,
         pub expires: u64,
     }
 }
+#[derive(Clone, serde::Serialize, PartialEq)]
+#[serde(tag = "role", rename_all = "snake_case")]
+pub enum Role {
+    Admin,
+    SimpleMode { profile_id: String },
+}
 pub struct Session {
+    pub role: Role,
+    requests: Vec<u64>,
     key: Vec<u8>,
     expires: u64,
     pub elevated_until: u64,
@@ -33,6 +41,8 @@ pub struct Auth {
     pending: BTreeMap<String, Pending>,
     sessions: BTreeMap<String, Session>,
     attempts: Vec<u64>,
+    failures: u32,
+    blocked_until: u64,
 }
 impl Auth {
     pub fn start(
@@ -45,7 +55,10 @@ impl Auth {
         self.pending.retain(|_, p| p.expires > now);
         self.sessions.retain(|_, s| s.expires > now);
         self.attempts.retain(|t| now.saturating_sub(*t) < 60);
-        if self.attempts.len() >= 10 || self.pending.len() + self.sessions.len() >= 8 {
+        if now < self.blocked_until
+            || self.attempts.len() >= 5
+            || self.pending.len() + self.sessions.len() >= 8
+        {
             bail!("Authentication unavailable");
         }
         self.attempts.push(now);
@@ -53,28 +66,69 @@ impl Auth {
         self.pending.insert(
             sid.into(),
             Pending {
-                state,
+                states: vec![(Role::Admin, state)],
                 expires: now + 30,
             },
         );
         Ok(json!({"type":"auth.challenge","salt":credential.salt,"b":b}))
     }
-    pub fn prove(&mut self, sid: &str, proof: &str, now: u64) -> Result<Value> {
+    pub fn add_profiles(
+        &mut self,
+        sid: &str,
+        a: &str,
+        profiles: &[crate::config::SimpleProfile],
+    ) -> Result<Value> {
+        let pending = self
+            .pending
+            .get_mut(sid)
+            .ok_or_else(|| anyhow::anyhow!("Authentication failed"))?;
+        let mut challenges = vec![];
+        for profile in profiles.iter().filter(|p| p.enabled) {
+            let (b, state) = profile.credential.begin(a)?;
+            pending.states.push((
+                Role::SimpleMode {
+                    profile_id: profile.id.clone(),
+                },
+                state,
+            ));
+            challenges.push(json!({"salt":profile.credential.salt,"b":b}));
+        }
+        Ok(json!(challenges))
+    }
+    pub fn role(&self, sid: &str, now: u64) -> Result<Role> {
+        self.sessions
+            .get(sid)
+            .filter(|s| s.expires > now)
+            .map(|s| s.role.clone())
+            .ok_or_else(|| anyhow::anyhow!("Authentication required"))
+    }
+    pub fn prove_many(&mut self, sid: &str, proofs: &[String], now: u64) -> Result<Value> {
         let p = self
             .pending
             .remove(sid)
             .ok_or_else(|| anyhow::anyhow!("Authentication failed"))?;
-        if p.expires <= now || proof.len() != 64 {
+        let found = p
+            .states
+            .into_iter()
+            .zip(proofs)
+            .find(|((_, state), proof)| {
+                p.expires > now
+                    && proof.len() == 64
+                    && hex::decode(proof).is_ok_and(|p| state.verify_client(&p).is_ok())
+            });
+        let Some(((role, state), _)) = found else {
+            self.failures = self.failures.saturating_add(1);
+            self.blocked_until = now + (1u64 << self.failures.min(10)).min(900);
             bail!("Authentication failed");
-        }
-        p.state
-            .verify_client(&hex::decode(proof)?)
-            .map_err(|_| anyhow::anyhow!("Authentication failed"))?;
-        let reply = json!({"type":"auth.ok","proof":hex::encode(p.state.proof()),"expiresIn":1800});
+        };
+        self.attempts.pop();
+        let reply = json!({"type":"auth.ok","proof":hex::encode(state.proof()),"expiresIn":1800});
         self.sessions.insert(
             sid.into(),
             Session {
-                key: p.state.key().to_vec(),
+                role,
+                requests: vec![],
+                key: state.key().to_vec(),
                 expires: now + 1800,
                 elevated_until: now + 300,
                 rx: 0,
@@ -83,11 +137,19 @@ impl Auth {
         );
         Ok(reply)
     }
+    pub fn prove(&mut self, sid: &str, proof: &str, now: u64) -> Result<Value> {
+        self.prove_many(sid, &[proof.into()], now)
+    }
     pub fn decrypt(&mut self, sid: &str, frame: &Value, now: u64) -> Result<Value> {
         let s = self
             .sessions
             .get_mut(sid)
             .ok_or_else(|| anyhow::anyhow!("Authentication required"))?;
+        s.requests.retain(|t| now.saturating_sub(*t) < 60);
+        if s.requests.len() >= 180 {
+            bail!("Session rate limit exceeded");
+        }
+        s.requests.push(now);
         let seq = frame["seq"].as_u64().unwrap_or(0);
         if s.expires <= now || seq != s.rx + 1 || seq > u32::MAX as u64 {
             bail!("Session expired or replay detected");
@@ -119,6 +181,10 @@ impl Auth {
         self.sessions
             .get(sid)
             .is_some_and(|s| s.elevated_until > now && s.expires > now)
+    }
+    pub fn revoke_profile(&mut self, profile_id: &str) {
+        self.sessions.retain(|_, session| !matches!(&session.role, Role::SimpleMode { profile_id: id } if id == profile_id));
+        self.pending.clear();
     }
     pub fn remove(&mut self, sid: &str) {
         self.pending.remove(sid);

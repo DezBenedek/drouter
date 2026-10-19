@@ -79,11 +79,13 @@ impl FileStorage {
 impl Storage for FileStorage {
     fn load(&self) -> Result<Option<Config>> {
         let mut found = false;
+        let mut slots = 0;
         let mut configs = vec![];
         for slot in 0..2 {
             let p = self.path.join(format!("config.{slot}"));
             if p.exists() {
                 found = true;
+                slots += 1;
                 if let Ok(c) = fs::read(p)
                     .map_err(anyhow::Error::from)
                     .and_then(|b| self.decode(&b))
@@ -96,7 +98,14 @@ impl Storage for FileStorage {
         if found && configs.is_empty() {
             bail!("Both configuration slots are damaged; restore backup or explicitly erase state");
         }
-        Ok(configs.pop())
+        let damaged = slots > configs.len();
+        let mut config = configs.pop();
+        if damaged {
+            if let Some(c) = &mut config {
+                c.event_mode = true;
+            }
+        }
+        Ok(config)
     }
     fn save(&mut self, config: &Config) -> Result<()> {
         config.validate()?;
@@ -149,7 +158,9 @@ mod tests {
         let data = fs::read(dir.path().join("config.0")).unwrap();
         assert!(!String::from_utf8_lossy(&data).contains("Opening"));
         fs::write(dir.path().join("config.0"), b"partial").unwrap();
-        assert_eq!(store.load().unwrap().unwrap().name, "test-router");
+        let recovered = store.load().unwrap().unwrap();
+        assert_eq!(recovered.name, "test-router");
+        assert!(recovered.event_mode);
         fs::write(dir.path().join("config.1"), b"partial").unwrap();
         assert!(store.load().is_err());
     }

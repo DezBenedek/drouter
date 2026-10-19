@@ -60,14 +60,17 @@ impl Storage for NvsStorage {
     fn load(&self) -> Result<Option<Config>> {
         let mut configs = vec![];
         let mut found = false;
+        let mut slots = 0;
         for name in ["slot0", "slot1"] {
             match self.nvs.blob_len(name) {
                 Ok(None) => continue,
                 Ok(Some(length)) if length <= 24608 => {
                     found = true;
+                    slots += 1;
                 }
                 _ => {
                     found = true;
+                    slots += 1;
                     continue;
                 }
             }
@@ -86,7 +89,14 @@ impl Storage for NvsStorage {
         if found && configs.is_empty() {
             bail!("Configuration damaged; use USB recovery");
         }
-        Ok(configs.pop())
+        let damaged = slots > configs.len();
+        let mut config = configs.pop();
+        if damaged {
+            if let Some(c) = &mut config {
+                c.event_mode = true;
+            }
+        }
+        Ok(config)
     }
     fn save(&mut self, c: &Config) -> Result<()> {
         c.validate()?;
@@ -265,6 +275,21 @@ fn create_server(shared: Shared) -> Result<EspHttpServer<'static>> {
             include_bytes!("../web/shared/client.js.gz").as_slice(),
         ),
         (
+            "/assets/shared/control.js",
+            "text/javascript",
+            include_bytes!("../web/shared/control.js.gz").as_slice(),
+        ),
+        (
+            "/assets/shared/i18n.js",
+            "text/javascript",
+            include_bytes!("../web/shared/i18n.js.gz").as_slice(),
+        ),
+        (
+            "/assets/shared/theme.js",
+            "text/javascript",
+            include_bytes!("../web/shared/theme.js.gz").as_slice(),
+        ),
+        (
             "/assets/shared/style.css",
             "text/css",
             include_bytes!("../web/shared/style.css.gz").as_slice(),
@@ -306,7 +331,7 @@ fn create_server(shared: Shared) -> Result<EspHttpServer<'static>> {
             .write_all(body.as_bytes())?;
         Ok(())
     })?;
-    for path in ["/session", "/setup", "/api"] {
+    for path in ["/session", "/setup", "/setup/network", "/api"] {
         let state = shared.clone();
         server.fn_handler::<anyhow::Error, _>(path, Method::Post, move |mut request| {
             let host = request.header("Host").unwrap_or("").to_owned();
@@ -333,6 +358,9 @@ fn create_server(shared: Shared) -> Result<EspHttpServer<'static>> {
                 }
                 let v: Value = serde_json::from_slice(&bytes)?;
                 let mut device = state.lock().unwrap();
+                if path == "/setup/network" {
+                    return device.setup_network();
+                }
                 if path == "/setup" {
                     device.setup(serde_json::from_value::<Setup>(v)?)
                 } else {
@@ -399,8 +427,9 @@ fn remote_loop(shared: Shared) {
         }
         let name = c.remote_name();
         let url = format!(
-            "{}/relay/{name}/device",
-            c.server.replacen("https://", "wss://", 1)
+            "{}/relay/{}/device",
+            c.server.replacen("https://", "wss://", 1),
+            c.device_id()
         );
         let (tx, rx) = mpsc::sync_channel(4);
         let cfg = EspWebSocketClientConfig {
@@ -439,7 +468,10 @@ fn remote_loop(shared: Shared) {
                 let valid = {
                     let d = shared.lock().unwrap();
                     d.config.as_ref().is_some_and(|x| {
-                        x.cloud_enabled && x.remote_name() == name && x.server == c.server
+                        x.cloud_enabled
+                            && x.remote_name() == name
+                            && x.device_id() == c.device_id()
+                            && x.server == c.server
                     })
                 };
                 if !valid || !registered && started.elapsed() > Duration::from_secs(15) {
@@ -459,7 +491,19 @@ fn remote_loop(shared: Shared) {
                             }
                             Some("registered") => {
                                 registered = true;
-                                shared.lock().unwrap().network.cloud = "connected".into();
+                                let mut d = shared.lock().unwrap();
+                                d.network.cloud = "connected".into();
+                                d.network.registered_name = v["name"].as_str().map(str::to_string);
+                                d.network.last_cloud_connection = Some(
+                                    std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs(),
+                                );
+                                None
+                            }
+                            Some("registration.error") => {
+                                shared.lock().unwrap().network.cloud = "name_unavailable".into();
                                 None
                             }
                             Some("forward") if registered => {
@@ -506,7 +550,12 @@ fn remote_loop(shared: Shared) {
                 }
             }
         }
-        shared.lock().unwrap().network.cloud = "offline".into();
+        {
+            let mut d = shared.lock().unwrap();
+            if d.network.cloud != "name_unavailable" {
+                d.network.cloud = "offline".into();
+            }
+        }
         std::thread::sleep(Duration::from_secs(backoff.next_delay()));
     }
 }
@@ -517,7 +566,6 @@ pub fn run() -> Result<()> {
     let peripherals = Peripherals::take()?;
     let sysloop = EspSystemEventLoop::take()?;
     let nvs = EspDefaultNvsPartition::take()?;
-    let setup_token = drouter_auth::random_hex(16);
     let mut storage = NvsStorage::new()?;
     let button = esp_idf_svc::hal::gpio::PinDriver::input(
         peripherals.pins.gpio0,
@@ -547,7 +595,6 @@ pub fn run() -> Result<()> {
         Box::new(EspBirdDog {
             deadline: Instant::now() + Duration::from_secs(10),
         }),
-        setup_token.clone(),
         false,
     )?;
     let initial = device.config.clone();
@@ -606,7 +653,7 @@ pub fn run() -> Result<()> {
 
     println!("Physical recovery: hold BOOT for 3 seconds to reveal the setup AP credentials; hold for 12 seconds to erase configuration.");
     if initial.is_none() {
-        println!("Setup SSID: {ssid}\nSetup AP password: {ap_password}\nPhysical provisioning token: {setup_token}\nOpen http://192.168.4.1");
+        println!("Setup SSID: {ssid}\nSetup AP password: {ap_password}\nOpen http://192.168.4.1");
     }
     device.network.cloud = if initial.as_ref().is_some_and(|c| c.cloud_enabled) {
         "offline"
@@ -703,8 +750,8 @@ pub fn run() -> Result<()> {
                 .iter()
                 .find(|p| Some(&p.id) == actual_profile.as_ref());
             let changed = current_profile
-                .map(|p| serde_json::to_string(p).unwrap())
-                .is_some_and(|s| s != actual_signature);
+                .map(|p| serde_json::to_string(&(&p.ssid, &p.password, p.enabled)).unwrap())
+                .is_none_or(|s| s != actual_signature);
             if actual_profile.is_some() && (requested_disconnect || changed) {
                 let _ = wifi.disconnect();
                 actual_profile = None;
@@ -743,10 +790,11 @@ pub fn run() -> Result<()> {
                     .scan_n::<32>()
                     .map(|(aps, _)| aps.iter().map(|ap| ap.ssid.to_string()).collect::<Vec<_>>())
                     .unwrap_or_default();
+                shared.lock().unwrap().network.available_wifi = scan.clone();
                 let profiles: Vec<_> = c
                     .wifi
                     .iter()
-                    .filter(|p| failed_until.get(&p.id).is_none_or(|t| now >= *t))
+                    .filter(|p| p.enabled && failed_until.get(&p.id).is_none_or(|t| now >= *t))
                     .cloned()
                     .collect();
                 let choice = {
@@ -761,7 +809,11 @@ pub fn run() -> Result<()> {
                         let profile = c.wifi.iter().find(|p| p.id == id).unwrap();
                         match apply_wifi(&mut wifi, &ap, Some(profile), ap_enabled) {
                             Ok(()) => {
-                                actual_signature = serde_json::to_string(profile)?;
+                                actual_signature = serde_json::to_string(&(
+                                    &profile.ssid,
+                                    &profile.password,
+                                    profile.enabled,
+                                ))?;
                                 actual_profile = Some(id);
                                 connect_at = now;
                             }
@@ -793,12 +845,22 @@ pub fn run() -> Result<()> {
                 .wifi
                 .active
                 .as_ref()
-                .is_some_and(|id| !c.wifi.iter().any(|p| &p.id == id))
+                .is_some_and(|id| !c.wifi.iter().any(|p| &p.id == id && p.enabled))
             {
                 let _ = wifi.disconnect();
                 actual_profile = None;
                 shared.lock().unwrap().network.wifi.active = None;
                 scan_at = 0;
+            }
+        } else if initial.is_none() {
+            let now = shared.lock().unwrap().now();
+            if now >= scan_at {
+                let scan = wifi
+                    .scan_n::<32>()
+                    .map(|(aps, _)| aps.iter().map(|ap| ap.ssid.to_string()).collect())
+                    .unwrap_or_default();
+                shared.lock().unwrap().network.available_wifi = scan;
+                scan_at = now + 30;
             }
         } else if initial.is_some() {
             unsafe {

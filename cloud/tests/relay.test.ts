@@ -39,9 +39,9 @@ describe("protocol boundary", () => {
       ),
     ).toBe(false);
   });
-  it("uses self-certifying remote names", async () => {
-    expect(remoteName.test("studio")).toBe(false);
-    expect(remoteName.test(`studio--${"a".repeat(32)}`)).toBe(true);
+  it("validates friendly names and requires identity proof", async () => {
+    expect(remoteName.test("studio")).toBe(true);
+    expect(remoteName.test(`studio--${"a".repeat(32)}`)).toBe(false);
     expect(
       await verifyRegistration(`studio--${"a".repeat(32)}`, "challenge", {
         name: "studio",
