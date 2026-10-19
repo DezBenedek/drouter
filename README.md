@@ -6,6 +6,8 @@ The macOS simulator runs the same authentication, validation, routing, preset, W
 
 ![Remote routing interface](docs/screenshots/remote-routing.png)
 
+Latest release: [v0.2.0](https://github.com/DezBenedek/drouter/releases/tag/v0.2.0) · [ESP32-S3 firmware image](https://github.com/DezBenedek/drouter/releases/download/v0.2.0/drouter-esp32s3.bin) · [SHA256SUMS](https://github.com/DezBenedek/drouter/releases/download/v0.2.0/SHA256SUMS).
+
 ## Repository
 
 | Directory | Purpose |
@@ -76,7 +78,11 @@ Sessions expire after 30 minutes. Wi-Fi/security/settings mutations require auth
 
 ## Interface
 
-Routing opens first. Desktop uses a keyboard-accessible matrix with sticky output/source headers and independent searches. Mobile and tablet use an output list and a full-screen searchable source selector. A route remains pending until the receiver confirms it. Presets show affected outputs before multi-output application. Devices use a compact list; Settings groups General, Ethernet, Wi-Fi, Remote Access, Security, and System. Light/dark appearance follows the system initially and can be changed. Both interfaces share CSS tokens and native system fonts; the ESP32 serves vanilla JavaScript and compressed assets, while cloud uses React components.
+Routing opens first. Desktop uses a compact matrix with sticky output/source headers, independent searches, saved-source crosspoints and a final All Sources selector. Mobile has a five-tab navigation bar, one-touch saved-source buttons for each output and a full-screen searchable source selector. All Sources remains visible beside the quick buttons. Routes stay pending until receiver readback confirms the change; failed switches retain the actual active source. Event Mode is always available to administrators in the header, with one confirmation before changing access. Sources rename inline, devices/presets expose editing directly, and Simple Mode profiles group their password and 1–10 numbered, collapsible action mappings in one editor. Destructive actions and live network changes retain confirmation. English/Hungarian, light/dark appearance, keyboard navigation, recovery and contact information remain available.
+
+Transient success, progress and error messages use a shared Sonner-style toast stack: bottom-left on desktop and above the bottom tab bar on mobile. Notifications also stay above open dialogs and the mobile More panel, can be dismissed, and pause expiry while hovered or focused.
+
+Both interfaces share a locally compiled Pico CSS subset and system fonts. The ESP32 runs vanilla JavaScript; React remains exclusive to the Cloudflare interface. Pico, Sass and axe are development dependencies; no runtime CDN requests are needed. Edit `scripts/design.css` for the design system and run `npm run build:css --prefix cloud`. Run `node scripts/pack-web.mjs` to regenerate minified/gzipped local assets without rebuilding authentication WASM. Ordinary cloud builds regenerate the stylesheet automatically. See [the audit and acceptance evidence](docs/ui/overhaul.md).
 
 No provisioning token is required. First boot is a five-step setup wizard: welcome, name/password, Ethernet/optional Wi-Fi profiles, optional remote access, and completion. Remote registration failure never blocks local setup.
 

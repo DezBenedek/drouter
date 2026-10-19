@@ -192,13 +192,9 @@ export async function modification3({
       .first()
       .click();
     await p.getByLabel("Display name", { exact: true }).fill("Cancelled alias");
+    assert.equal(await p.getByRole("dialog").count(), 0);
     await p
-      .getByRole("dialog")
-      .getByRole("button", { name: "Save", exact: true })
-      .click();
-    await p
-      .getByRole("dialog")
-      .filter({ hasText: "Confirm changes" })
+      .locator(".inline-editor")
       .getByRole("button", { name: "Cancel", exact: true })
       .click();
     assert(
@@ -206,14 +202,6 @@ export async function modification3({
         (s) => s.display_name === "Cancelled alias",
       ),
     );
-    await p
-      .getByRole("dialog")
-      .filter({ hasText: "Confirm changes" })
-      .waitFor({ state: "detached" });
-    await p
-      .getByRole("dialog")
-      .getByRole("button", { name: "Cancel", exact: true })
-      .click();
     await p
       .waitForFunction(
         () => document.querySelectorAll("dialog[open]").length === 0,
@@ -275,12 +263,6 @@ export async function modification3({
       .click();
     await editor.getByLabel("Label", { exact: true }).nth(1).fill("Camera");
     await editor.getByRole("button", { name: "Save", exact: true }).click();
-    const confirmation = p
-      .getByRole("dialog")
-      .filter({ hasText: "Confirm changes" });
-    await confirmation
-      .getByRole("button", { name: "Confirm", exact: true })
-      .click();
     await p
       .waitForFunction(
         () => document.querySelectorAll("dialog[open]").length === 0,
@@ -325,7 +307,7 @@ export async function modification3({
       });
     assert.equal((await admin.call("simple.list")).length, 2);
     pass(
-      "independent searchable Other source selectors route original identifiers without saving; profile editor creates multiple buttons and confirms configuration",
+      "independent searchable Other source selectors route original identifiers without saving; profile editor saves multiple buttons directly and confirms destructive changes",
     );
     await p.getByRole("button", { name: "Settings", exact: true }).click();
     await p

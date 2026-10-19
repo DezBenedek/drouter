@@ -9,6 +9,7 @@ import { generateKeyPairSync, createHash, sign } from "node:crypto";
 import WebSocket from "ws";
 import init from "../../firmware/web/shared/auth.js";
 import { Client } from "../../firmware/web/shared/client.js";
+import { checkOverhaul } from "./overhaul.mjs";
 import { modification3 } from "./modification3.mjs";
 import { checkInterfaces, checkSetup } from "./ui.mjs";
 const root = path.resolve(
@@ -370,6 +371,16 @@ try {
   pass(
     "real Chromium local and React remote UIs route receivers; mobile layout verified",
   );
+  await checkOverhaul({
+    local,
+    cloud,
+    name,
+    password,
+    root,
+    admin: localClient,
+    fault,
+    pass,
+  });
   await modification3({
     admin: localClient,
     local,

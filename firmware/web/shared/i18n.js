@@ -1,5 +1,53 @@
 export const dictionaries = {
   en: {
+    Notifications: "Notifications",
+    "Dismiss notification": "Dismiss notification",
+    "Event Mode enabled": "Event Mode enabled",
+    "Event Mode disabled": "Event Mode disabled",
+    "Select a source for each output": "Select a source for each output",
+    "New button": "New button",
+    "Loading device state…": "Loading device state…",
+    More: "More",
+    "More options": "More options",
+    "Move up": "Move up",
+    "Move down": "Move down",
+    "Move button up": "Move button up",
+    "Move button down": "Move button down",
+    "Last known": "Last known",
+    "Change source for {output}": "Change source for {output}",
+    "Choose the sources that appear in Routing":
+      "Choose the sources that appear in Routing",
+    "Focused controls for your team": "Focused controls for your team",
+    "Change network settings?": "Change network settings?",
+    "This may interrupt your connection. Keep local Ethernet or physical recovery access available.":
+      "This may interrupt your connection. Keep local Ethernet or physical recovery access available.",
+    "This removes the saved network and its password.":
+      "This removes the saved network and its password.",
+    Details: "Details",
+    "Leave empty to keep the saved password.":
+      "Leave empty to keep the saved password.",
+    "Existing actions remain available until you save.":
+      "Existing actions remain available until you save.",
+    "Leave empty to keep the current password.":
+      "Leave empty to keep the current password.",
+    "Refresh failed. Displayed state may be out of date.":
+      "Refresh failed. Displayed state may be out of date.",
+    "No receivers found. Add a receiver by IP.":
+      "No receivers found. Add a receiver by IP.",
+    "No receivers found. You can add a receiver by IP.":
+      "No receivers found. You can add a receiver by IP.",
+    "Enable remote access?": "Enable remote access?",
+    "Disable remote access?": "Disable remote access?",
+    "Rename output": "Rename output",
+    "Rename receiver": "Rename receiver",
+    "Edit Wi-Fi network": "Edit Wi-Fi network",
+    "Save changes": "Save changes",
+    "WPA2-Personal · 8–63 characters": "WPA2-Personal · 8–63 characters",
+    "Your DRouter will reserve its name and connect automatically. No cloud account is needed.":
+      "Your DRouter will reserve its name and connect automatically. No cloud account is needed.",
+    "Local routing stays available. The registered name remains reserved to this device.":
+      "Local routing stays available. The registered name remains reserved to this device.",
+    "Ethernet settings saved.": "Ethernet settings saved.",
     Routing: "Routing",
     Sources: "Sources",
     Devices: "Devices",
@@ -508,6 +556,54 @@ export const dictionaries = {
     "DRouter · Local": "DRouter · Local",
   },
   hu: {
+    Notifications: "Értesítések",
+    "Dismiss notification": "Értesítés bezárása",
+    "Event Mode enabled": "Rendezvény mód bekapcsolva",
+    "Event Mode disabled": "Rendezvény mód kikapcsolva",
+    "Select a source for each output": "Válasszon forrást a kimenetekhez",
+    "New button": "Új gomb",
+    "Loading device state…": "Eszközállapot betöltése…",
+    More: "Továbbiak",
+    "More options": "További beállítások",
+    "Move up": "Előrébb",
+    "Move down": "Hátrébb",
+    "Move button up": "Gomb előrébb helyezése",
+    "Move button down": "Gomb hátrébb helyezése",
+    "Last known": "Utoljára ismert",
+    "Change source for {output}": "{output} forrásának módosítása",
+    "Choose the sources that appear in Routing":
+      "Válassza ki az Útválasztás oldalon megjelenő forrásokat",
+    "Focused controls for your team": "Egyszerű vezérlés a csapatnak",
+    "Change network settings?": "Módosítja a hálózati beállításokat?",
+    "This may interrupt your connection. Keep local Ethernet or physical recovery access available.":
+      "A kapcsolat megszakadhat. Legyen elérhető helyi Ethernet-kapcsolat vagy fizikai helyreállítási lehetőség.",
+    "This removes the saved network and its password.":
+      "Ez törli a mentett hálózatot és a jelszavát.",
+    Details: "Részletek",
+    "Leave empty to keep the saved password.":
+      "Hagyja üresen a mentett jelszó megtartásához.",
+    "Existing actions remain available until you save.":
+      "A jelenlegi műveletek a mentésig elérhetők.",
+    "Leave empty to keep the current password.":
+      "Hagyja üresen a jelenlegi jelszó megtartásához.",
+    "Refresh failed. Displayed state may be out of date.":
+      "A frissítés sikertelen. A megjelenített állapot elavult lehet.",
+    "No receivers found. Add a receiver by IP.":
+      "Nem található vevő. Adja hozzá IP-cím alapján.",
+    "No receivers found. You can add a receiver by IP.":
+      "Nem található vevő. Adja hozzá IP-cím alapján.",
+    "Enable remote access?": "Engedélyezi a távoli hozzáférést?",
+    "Disable remote access?": "Letiltja a távoli hozzáférést?",
+    "Rename output": "Kimenet átnevezése",
+    "Rename receiver": "Vevő átnevezése",
+    "Edit Wi-Fi network": "Wi-Fi-hálózat szerkesztése",
+    "Save changes": "Módosítások mentése",
+    "WPA2-Personal · 8–63 characters": "WPA2-Personal · 8–63 karakter",
+    "Your DRouter will reserve its name and connect automatically. No cloud account is needed.":
+      "A DRouter lefoglalja a nevét, és automatikusan csatlakozik. Nem szükséges felhőfiók.",
+    "Local routing stays available. The registered name remains reserved to this device.":
+      "A helyi útválasztás elérhető marad. A regisztrált név továbbra is az eszközhöz tartozik.",
+    "Ethernet settings saved.": "Ethernet-beállítások mentve.",
     Routing: "Útválasztás",
     Sources: "Források",
     Devices: "Eszközök",
@@ -1124,6 +1220,10 @@ export function installLocalization() {
         ".auth-brand,.topbar-actions,.simple-screen header",
       );
       if (target) target.insertAdjacentHTML("beforeend", languageControl());
+    }
+    for (const host of document.querySelectorAll("[data-language-host]")) {
+      if (!host.querySelector("[data-language]"))
+        host.innerHTML = languageControl();
     }
     localize(document.body);
   };

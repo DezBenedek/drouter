@@ -1,8 +1,17 @@
-import { mountControl, mountSimple } from "./shared/control.js";
+import {
+  mountControl,
+  mountSimple,
+  toggleEvent,
+  eventControl,
+  confirmChange,
+  toast,
+  dismissToast,
+} from "./shared/control.js";
 import {
   installLocalization,
   languageControl,
   language,
+  t,
 } from "./shared/i18n.js";
 import { Client, randomId } from "./shared/client.js";
 import { theme, toggleTheme } from "./shared/theme.js";
@@ -52,9 +61,6 @@ let client,
   message = "",
   failure = "",
   outputSearch = "",
-  sourceSearch = "",
-  pending = null,
-  routeErrors = {},
   dragId;
 let dialog, dialogSubmit, controlCleanup, restrictedCleanup;
 function closeDialog() {
@@ -76,7 +82,7 @@ function modal(
   const previous = document.activeElement;
   dialog = document.createElement("dialog");
   dialog.className = `dialog ${source ? "source-dialog" : ""}`;
-  dialog.innerHTML = `<header class="dialog-header">${source ? button("‹", "close-dialog", 'class="quiet icon-button mobile-only" aria-label="Back to outputs"') : ""}<div><h2 id="dialog-title">${esc(title)}</h2>${description ? `<p>${esc(description)}</p>` : ""}</div>${button("×", "close-dialog", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body"><form id="action-form"><div class="notice error" role="alert" hidden></div>${body}</form></div>${submitLabel ? `<footer class="dialog-footer">${button("Cancel", "close-dialog")}<button type="submit" form="action-form" class="primary">${submitLabel}</button></footer>` : ""}`;
+  dialog.innerHTML = `<header class="dialog-header">${source ? button("‹", "close-dialog", 'class="quiet icon-button mobile-only" aria-label="Back to outputs"') : ""}<div><h2 id="dialog-title">${esc(title)}</h2>${description ? `<p>${esc(description)}</p>` : ""}</div>${button("×", "close-dialog", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body"><form id="action-form">${body}</form></div>${submitLabel ? `<footer class="dialog-footer">${button("Cancel", "close-dialog")}<button type="submit" form="action-form" class="primary">${submitLabel}</button></footer>` : ""}`;
   dialog.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -143,11 +149,6 @@ async function run(task, close = false) {
     if (close && dialog === current) closeDialog();
   } catch (e) {
     failure = e.message;
-    if (dialog) {
-      const el = dialog.querySelector(".notice");
-      el.hidden = false;
-      el.textContent = e.message;
-    }
     try {
       if (client) await refresh();
     } catch {}
@@ -155,9 +156,18 @@ async function run(task, close = false) {
     busy = false;
     dialog?.querySelectorAll("button").forEach((b) => (b.disabled = false));
     render();
+    if (failure || message)
+      toast(
+        failure || message,
+        failure ? "error" : "success",
+        "local-operation",
+      );
+    failure = "";
+    message = "";
   }
 }
 function logout(text = "") {
+  dismissToast();
   controlCleanup?.();
   restrictedCleanup?.();
   restrictedCleanup = null;
@@ -181,7 +191,8 @@ async function connect(p) {
   render();
 }
 function login(error = "") {
-  root.innerHTML = `<main class="auth-screen"><div class="auth-panel"><div class="auth-brand">${brand}${languageControl()}</div><h1>Connect to your DRouter</h1><p>Local device control</p><form id="login-form">${password("password", "Password", true)}<div class="notice error" ${error ? "" : "hidden"} role="alert">${esc(error)}</div><button class="primary auth-submit">Connect</button></form><div class="auth-foot"><span>Verified on this device</span>${button(theme() === "dark" ? "Light appearance" : "Dark appearance", "theme", 'class="quiet"')}</div></div></main>`;
+  if (error) toast(error, "error", "login-error");
+  root.innerHTML = `<main class="auth-screen"><div class="auth-panel"><div class="auth-brand">${brand}${languageControl()}</div><h1>Connect to your DRouter</h1><p>Local device control</p><form id="login-form">${password("password", "Password", true)}<button class="primary auth-submit">Connect</button></form><div class="auth-foot"><span>Verified on this device</span>${button(theme() === "dark" ? "Light appearance" : "Dark appearance", "theme", 'class="quiet"')}</div></div></main>`;
   root.querySelector("form").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.currentTarget;
@@ -210,7 +221,7 @@ function setup() {
     content = `<h1>Access from anywhere</h1><p class="section-caption">Securely control your DRouter outside your local network.</p>${row("Enable remote access", `<input type="checkbox" role="switch" name="cloud" ${s.cloud ? "checked" : ""} aria-label="Enable remote access">`)}<p class="help-text">No cloud account required. Your device keeps all settings and verifies your password.</p>`;
   if (setupStep === 4)
     content = `<h1>Your DRouter is ready</h1><p class="section-caption">${esc(s.name)} is configured. You can change these settings at any time.</p><div class="finished-link"><span class="secondary">Local access</span><a href="${location.origin}">${esc(location.origin)}</a></div>${s.cloud ? `<div class="finished-link"><span class="secondary">Remote access</span><a href="https://drouter.dezso.hu/?device=${encodeURIComponent(s.name)}">drouter.dezso.hu · ${esc(s.name)}</a><small>Name reservation completes when the device connects. Check Remote Access settings for status.</small></div>` : ""}`;
-  root.innerHTML = `<main class="auth-screen setup-screen"><form class="auth-panel setup-panel"><div class="auth-brand">${brand}${languageControl()}</div><div class="setup-progress" aria-label="Setup step ${setupStep + 1} of 5">${[0, 1, 2, 3, 4].map((i) => `<span class="${i <= setupStep ? "complete" : ""}"></span>`).join("")}</div><div class="setup-content">${content}<div class="notice inline error" role="alert" hidden></div></div><div class="setup-actions">${setupStep > 0 && setupStep < 4 ? button("Back", "setup-back") : "<span></span>"}<button class="primary">${setupStep === 3 ? "Finish setup" : setupStep === 4 ? "Open DRouter" : "Continue"}</button></div></form></main>`;
+  root.innerHTML = `<main class="auth-screen setup-screen"><form class="auth-panel setup-panel"><div class="auth-brand">${brand}${languageControl()}</div><div class="setup-progress" aria-label="Setup step ${setupStep + 1} of 5">${[0, 1, 2, 3, 4].map((i) => `<span class="${i <= setupStep ? "complete" : ""}"></span>`).join("")}</div><div class="setup-content">${content}</div><div class="setup-actions">${setupStep > 0 && setupStep < 4 ? button("Back", "setup-back") : "<span></span>"}<button class="primary">${setupStep === 3 ? "Finish setup" : setupStep === 4 ? "Open DRouter" : "Continue"}</button></div></form></main>`;
   if (setupStep === 1) {
     root.querySelector("[name=admin]").value = s.admin;
     root.querySelector("[name=admin]").autocomplete = "new-password";
@@ -266,9 +277,7 @@ function setup() {
       setupStep++;
       setup();
     } catch (e) {
-      const el = root.querySelector(".notice");
-      el.hidden = false;
-      el.textContent = e.message;
+      toast(e.message, "error", "setup-error");
     } finally {
       b.disabled = false;
     }
@@ -288,11 +297,8 @@ function render() {
     wifi: w,
   } = data;
   const outputs = r.filter((x) =>
-      x.config.label.toLowerCase().includes(outputSearch.toLowerCase()),
-    ),
-    sources = s.filter((x) =>
-      x.name.toLowerCase().includes(sourceSearch.toLowerCase()),
-    );
+    x.config.label.toLowerCase().includes(outputSearch.toLowerCase()),
+  );
   let content = "",
     actions = "";
   if (page === "Routing") {
@@ -305,11 +311,11 @@ function render() {
     content = `<div class="page-body" id="control-host"></div>`;
   if (page === "Devices") {
     actions = button("Add receiver", "add-receiver", 'class="primary"');
-    content = `<div class="page-body"><div class="routing-tools">${search("Find an output", outputSearch, "output")}${button("Discover", "discover")}</div><div class="data-list">${outputs.map((x) => `<div class="list-row"><div class="list-main"><strong>${esc(x.config.label)}</strong><span class="secondary">${esc(x.model || "BirdDog decoder")}<span class="mobile-only mobile-address">${esc(x.config.ip)}</span></span></div><span class="address mono">${esc(x.config.ip)}</span>${status(x.state.online, x.state.online ? "Online" : "Offline")}<span class="route-name secondary">${esc(x.state.source || "Unavailable")}</span>${button("···", "receiver-detail", `class="quiet icon-button" data-id="${esc(x.config.id)}" aria-label="Details for ${esc(x.config.label)}"`)}</div>`).join("")}</div>${!r.length ? empty("Add your first receiver", "Discover compatible devices or register a BirdDog by IP.") : ""}</div>`;
+    content = `<div class="page-body"><div class="routing-tools">${search("Find an output", outputSearch, "output")}${button("Discover", "discover")}</div><div class="data-list">${outputs.map((x) => `<div class="list-row"><div class="list-main"><strong>${esc(x.config.label)}</strong><span class="secondary">${esc(x.model || "BirdDog decoder")}<span class="mobile-only mobile-address">${esc(x.config.ip)}</span></span></div><span class="address mono">${esc(x.config.ip)}</span>${status(x.state.online, x.state.online ? "Online" : "Offline")}<span class="route-name secondary">${esc(x.state.source || "Unavailable")}</span><div class="row-actions">${button("Rename", "rename-receiver", `data-id="${esc(x.config.id)}"`)}${button("Details", "receiver-detail", `class="quiet" data-id="${esc(x.config.id)}"`)}${button("Remove", "remove-receiver", `class="quiet danger" data-id="${esc(x.config.id)}"`)}</div></div>`).join("")}</div>${!r.length ? empty("Add your first receiver", "Discover compatible devices or register a BirdDog by IP.") : ""}</div>`;
   }
   if (page === "Presets") {
     actions = button("Save current", "save-preset", 'class="primary"');
-    content = `<div class="page-body"><div class="data-list">${p.map((x) => `<div class="list-row"><div class="list-main">${button(esc(x.name), "inspect-preset", `class="preset-name" data-id="${x.id}"`)}<span class="preset-detail">${x.routes.length} outputs</span></div>${button("Apply", "apply-preset", `data-id="${x.id}"`)}${button("···", "preset-detail", `class="quiet icon-button" data-id="${x.id}" aria-label="Edit ${esc(x.name)}"`)}</div>`).join("")}</div>${!p.length ? empty("Save a routing arrangement", "Presets capture verified output sources and stay on this DRouter.") : ""}</div>`;
+    content = `<div class="page-body"><div class="data-list">${p.map((x) => `<div class="list-row"><div class="list-main">${button(esc(x.name), "inspect-preset", `class="preset-name" data-id="${x.id}"`)}<span class="preset-detail">${x.routes.length} outputs</span></div>${button("Apply", "apply-preset", `data-id="${x.id}"`)}<div class="row-actions">${button("Rename", "rename-preset", `data-id="${x.id}"`)}${button("Delete", "delete-preset", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div>${!p.length ? empty("Save a routing arrangement", "Presets capture verified output sources and stay on this DRouter.") : ""}</div>`;
   }
   if (page === "Settings") {
     const sections = [
@@ -350,7 +356,7 @@ function render() {
     if (current === "Wi-Fi")
       body =
         button("Add network", "wifi-edit") +
-        `<div class="data-list list-spaced">${w.map((x, index) => `<div class="wifi-row ${x.enabled ? "" : "disabled"}" draggable="true" data-wifi="${esc(x.id)}"><span class="priority">${index + 1}</span><div class="wifi-copy"><strong>${esc(x.ssid)}</strong><span class="secondary">${n.wifi.connected && n.wifi.active === x.id ? "Connected" : x.enabled ? "Saved" : "Disabled"}</span></div><div class="wifi-actions">${button("↑", "wifi-up", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} up" ${index === 0 ? "disabled" : ""}`)}${button("↓", "wifi-down", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} down" ${index === w.length - 1 ? "disabled" : ""}`)}${button("Edit", "wifi-edit", `class="quiet edit-network" data-id="${x.id}"`)}<input type="checkbox" role="switch" data-toggle-wifi="${x.id}" aria-label="Enable ${esc(x.ssid)}" ${x.enabled ? "checked" : ""}>${button("···", "wifi-more", `class="quiet icon-button" data-id="${x.id}" aria-label="More options for ${esc(x.ssid)}"`)}</div></div>`).join("")}</div><p class="help-text">Passwords stay on this device. Drag rows or use arrows to change priority.</p><details class="disclosure"><summary>Priority behavior</summary><form data-form="policy">${field("preferred", "Preferred network check interval (seconds)", i.wifi_policy.preferred_check_secs, "number", 'min="60" max="3600"')}${field("retry", "Reconnect cooldown (seconds)", i.wifi_policy.retry_secs, "number", 'min="5" max="120"')}<label class="field-row"><input type="checkbox" name="prefer" ${i.wifi_policy.prefer_higher ? "checked" : ""}>Prefer higher-priority networks when stable</label><div class="form-actions"><button>Save behavior</button></div></form></details>`;
+        `<div class="data-list list-spaced">${w.map((x, index) => `<div class="wifi-row ${x.enabled ? "" : "disabled"}" draggable="true" data-wifi="${esc(x.id)}"><span class="priority">${index + 1}</span><div class="wifi-copy"><strong>${esc(x.ssid)}</strong><span class="secondary">${n.wifi.connected && n.wifi.active === x.id ? "Connected" : x.enabled ? "Saved" : "Disabled"}</span></div><div class="wifi-actions">${button("↑", "wifi-up", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} up" ${index === 0 ? "disabled" : ""}`)}${button("↓", "wifi-down", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} down" ${index === w.length - 1 ? "disabled" : ""}`)}${button("Edit", "wifi-edit", `class="quiet edit-network" data-id="${x.id}"`)}<input type="checkbox" role="switch" data-toggle-wifi="${x.id}" aria-label="Enable ${esc(x.ssid)}" ${x.enabled ? "checked" : ""}>${button("Reconnect", "wifi-connect", `class="quiet" data-id="${x.id}" ${x.enabled ? "" : "disabled"}`)}${button("Remove", "wifi-remove", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div><p class="help-text">Passwords stay on this device. Drag rows or use arrows to change priority.</p><details class="disclosure"><summary>Priority behavior</summary><form data-form="policy">${field("preferred", "Preferred network check interval (seconds)", i.wifi_policy.preferred_check_secs, "number", 'min="60" max="3600"')}${field("retry", "Reconnect cooldown (seconds)", i.wifi_policy.retry_secs, "number", 'min="5" max="120"')}<label class="field-row"><input type="checkbox" name="prefer" ${i.wifi_policy.prefer_higher ? "checked" : ""}>Prefer higher-priority networks when stable</label><div class="form-actions"><button>Save behavior</button></div></form></details>`;
     if (current === "Remote Access")
       body =
         row(
@@ -420,19 +426,19 @@ function render() {
         );
     content = `<div class="page-body"><div class="settings-layout" ${section ? `data-section="${esc(section)}"` : ""}><nav class="settings-nav" aria-label="Settings sections">${sections.map((x) => button(x, "settings-section", `data-section="${x}" ${current === x ? 'aria-current="page"' : ""}`)).join("")}</nav><section class="settings-section">${button("‹ Settings", "settings-back", 'class="settings-back"')}<h2>${current}</h2><p class="section-caption">${{ General: "The name and identity of this DRouter.", Ethernet: "The wired connection to your BirdDog network.", "Wi-Fi": "Networks are tried from highest to lowest priority.", "Remote Access": "Connect securely from outside your local network.", "Access Control": "Simple Mode and Event Mode access.", Security: "Your device is the only password authority.", System: "Software, storage, and recovery." }[current]}</p>${body}</section></div></div>`;
   }
-  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong>${esc(i.name)}</strong><span class="secondary">Local</span></div><div class="topbar-actions"><span class="event-indicator" ${i.event_mode ? "" : "hidden"}>Event Mode</span>${languageControl()}${status(true, "Local connection")}${button(theme() === "dark" ? "☀" : "☾", "theme", 'class="quiet icon-button" aria-label="Change appearance"')}${button("↪", "logout", 'class="quiet icon-button" aria-label="Disconnect"')}</div></header><nav class="app-nav" aria-label="Main navigation">${Object.keys(
+  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong>${esc(i.name)}</strong><span class="secondary">Local</span></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${status(true, "Local connection")}${button(theme() === "dark" ? "☀" : "☾", "theme", 'class="quiet icon-button" aria-label="Change appearance"')}${button("↪", "logout", 'class="quiet icon-button" aria-label="Disconnect"')}</div></header><nav class="app-nav" aria-label="Main navigation">${Object.keys(
     icons,
   )
     .map((t) =>
       button(
         icons[t] + `<span>${t}</span>`,
         "page",
-        `data-page="${t}" ${page === t ? 'aria-current="page"' : ""}`,
+        `data-nav="${t}" data-page="${t}" ${page === t ? 'aria-current="page"' : ""}`,
       ),
     )
     .join(
       "",
-    )}<div class="nav-footer">Standalone by design<br>DRouter ${esc(i.version)}</div></nav><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1><p class="secondary">${page === "Routing" ? `${r.filter((x) => x.state.online).length} of ${r.length} outputs online · ${s.length} sources` : page === "Devices" ? "BirdDog receivers on your network" : page === "Presets" ? "Routing arrangements saved on this device" : "Device preferences and connectivity"}</p></div><div class="page-actions">${actions}</div></header>${failure && !dialog ? `<div class="notice error" role="alert">${esc(failure)}</div>` : ""}${message ? `<div class="notice success" role="status">${esc(message)}</div>` : ""}${content}</main></div>`;
+    )}<button type="button" data-action="more" class="mobile-more" aria-expanded="false">${icon('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>')}<span>More</span></button><div class="nav-footer">Standalone by design<br>DRouter ${esc(i.version)}</div></nav><div class="more-menu" hidden>${["Devices", "Simple Modes"].map((name) => button(icons[name] + `<span>${t(name)}</span>`, "page", `data-page="${name}"`)).join("")}${button(icons.Settings + "Wi-Fi", "open-wifi")}<div class="more-preferences">${languageControl()}${button("Change appearance", "theme", 'class="quiet"')}</div></div><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1><p class="secondary">${page === "Routing" ? "Select a source for each output" : page === "Devices" ? "BirdDog receivers on your network" : page === "Presets" ? "Routing arrangements saved on this device" : page === "Sources" ? "Choose the sources that appear in Routing" : page === "Simple Modes" ? "Focused controls for your team" : "Device preferences and connectivity"}</p></div><div class="page-actions">${actions}</div></header>${content}</main></div>`;
   if (root.querySelector("#control-host"))
     controlCleanup = mountControl(
       root.querySelector("#control-host"),
@@ -485,21 +491,18 @@ function render() {
   );
 }
 async function settings(values) {
+  if (
+    (values.ethernet || values.server || values.cloud_enabled !== undefined) &&
+    !(await confirmChange(
+      "Change network settings?",
+      "This may interrupt your connection. Keep local Ethernet or physical recovery access available.",
+    ))
+  )
+    return;
   return client.call("settings.update", {
     expected_revision: data.info.revision,
     ...values,
   });
-}
-function picker(id) {
-  const r = data.receivers.find((x) => x.config.id === id);
-  modal(
-    "Choose a source",
-    `<div class="source-search">${search("Search sources", "", "picker")}</div><p class="source-current">Current: ${esc(r.state.source || "No source")}</p><div class="source-list">${data.sources.map((s) => button(`<span class="source-name">${esc(s.name)}</span>${s.name === r.state.source ? "✓" : ""}`, "route", `class="source-option ${s.name === r.state.source ? "active" : ""}" data-id="${id}" data-source="${esc(s.name)}" aria-label="${esc(s.name)}" aria-pressed="${s.name === r.state.source}"`)).join("")}</div>`,
-    null,
-    null,
-    r.config.label,
-    true,
-  );
 }
 function presetBody(p) {
   return p.routes
@@ -516,12 +519,16 @@ function applyPreset(p) {
     "Apply preset",
     async () => {
       const v = await client.call("presets.apply", { id: p.id });
-      message = v.results
+      const report = v.results
         .map(
           (x) =>
             `${data.receivers.find((r) => r.config.id === x.receiver)?.config.label || x.receiver}: ${x.ok ? "Verified" : x.error}`,
         )
         .join("\n");
+      if (v.results.some((x) => !x.ok)) {
+        failure = report;
+        message = "";
+      } else message = report;
     },
     `${p.routes.length} outputs will be updated and verified.`,
   );
@@ -562,6 +569,29 @@ async function action(d) {
     );
     return;
   }
+  if (d.action === "more") {
+    const menu = root.querySelector(".more-menu");
+    menu.hidden = !menu.hidden;
+    d.element.setAttribute("aria-expanded", !menu.hidden);
+    return;
+  }
+  if (d.action === "open-wifi") {
+    page = "Settings";
+    section = "Wi-Fi";
+    render();
+    return;
+  }
+  if (d.action === "event-toggle") {
+    d.element.disabled = true;
+    try {
+      await toggleEvent(client);
+    } catch (error) {
+      toast(error.message, "error", "event-mode");
+    } finally {
+      d.element.disabled = false;
+    }
+    return;
+  }
   if (d.action === "theme") {
     toggleTheme();
     if (client) render();
@@ -572,6 +602,7 @@ async function action(d) {
     return;
   }
   if (d.action === "page") {
+    if (busy) return;
     page = d.page;
     section = "";
     message = "";
@@ -615,26 +646,6 @@ async function action(d) {
         setup();
       },
     );
-    return;
-  }
-  if (d.action === "pick-source") {
-    picker(d.id);
-    return;
-  }
-  if (d.action === "route") {
-    closeDialog();
-    pending = { id: d.id, source: d.source };
-    delete routeErrors[d.id];
-    await run(async () => {
-      try {
-        await client.call("route.set", { receiver: d.id, source: d.source });
-      } catch (e) {
-        routeErrors[d.id] = e.message;
-        throw e;
-      } finally {
-        pending = null;
-      }
-    });
     return;
   }
   if (d.action === "add-receiver") {
@@ -729,14 +740,6 @@ async function action(d) {
   }
   if (d.action === "wifi-edit") {
     editWifi(data.wifi.find((x) => x.id === d.id));
-    return;
-  }
-  if (d.action === "wifi-more") {
-    const w = data.wifi.find((x) => x.id === d.id);
-    modal(
-      w.ssid,
-      `<div class="inline-actions">${button("Reconnect", "wifi-connect", `data-id="${w.id}" ${w.enabled ? "" : "disabled"}`)}${button("Remove", "wifi-remove", `data-id="${w.id}" class="danger"`)}</div>`,
-    );
     return;
   }
   if (d.action === "wifi-remove") {
@@ -891,20 +894,10 @@ document.addEventListener("click", (e) => {
 document.addEventListener("input", (e) => {
   const id = e.target.dataset.search;
   if (!id) return;
-  if (id === "picker") {
-    const q = e.target.value.toLowerCase();
-    dialog
-      .querySelectorAll(".source-option")
-      .forEach((b) => (b.hidden = !b.textContent.toLowerCase().includes(q)));
-    return;
-  }
-  const pos = e.target.selectionStart;
   if (id === "output") outputSearch = e.target.value;
-  else sourceSearch = e.target.value;
   render();
   const input = root.querySelector(`[data-search="${id}"]`);
   input?.focus();
-  if (input?.type !== "search") input?.setSelectionRange(pos, pos);
 });
 document.addEventListener("change", (e) => {
   if (e.target.matches("[data-toggle-wifi]"))
@@ -921,24 +914,11 @@ document.addEventListener("change", (e) => {
   if (e.target.matches("[data-available]"))
     dialog.querySelector("[name=ssid]").value = e.target.value;
 });
-document.addEventListener("keydown", (e) => {
-  const t = e.target;
-  if (!t.matches(".crosspoint")) return;
-  const moves = {
-      ArrowRight: [0, 1],
-      ArrowLeft: [0, -1],
-      ArrowUp: [-1, 0],
-      ArrowDown: [1, 0],
-    },
-    move = moves[e.key];
-  if (move) {
-    e.preventDefault();
-    root
-      .querySelector(
-        `[data-row="${+t.dataset.row + move[0]}"][data-col="${+t.dataset.col + move[1]}"]`,
-      )
-      ?.focus();
-  }
+document.addEventListener("drouter-info", (event) => {
+  if (!client || restrictedCleanup) return;
+  data.info = event.detail;
+  const toggle = root.querySelector(".event-toggle");
+  toggle?.setAttribute("aria-checked", !!data.info.event_mode);
 });
 setInterval(() => {
   if (
@@ -947,6 +927,7 @@ setInterval(() => {
     !dialog &&
     !controlCleanup &&
     !restrictedCleanup &&
+    !root.querySelector("form[data-form]:focus-within") &&
     document.visibilityState === "visible"
   )
     void refresh()

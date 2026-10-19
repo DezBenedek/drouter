@@ -149,13 +149,20 @@ export async function checkInterfaces({
       await p.getByRole("dialog").waitFor();
       await p.keyboard.press("Escape");
       await p.getByRole("dialog").waitFor({ state: "detached" });
+      await p.getByRole("button", { name: "More", exact: true }).click();
       await p
+        .locator(".more-menu")
         .getByRole("button", { name: "Change appearance", exact: true })
         .click();
       await capture(p, `${kind}-dark-mobile`);
+      if (!(await p.locator(".more-menu").isVisible()))
+        await p.getByRole("button", { name: "More", exact: true }).click();
       await p
+        .locator(".more-menu")
         .getByRole("button", { name: "Change appearance", exact: true })
         .click();
+      if (await p.locator(".more-menu").isVisible())
+        await p.getByRole("button", { name: "More", exact: true }).click();
       await p.getByRole("button", { name: "Presets", exact: true }).click();
       await p.getByRole("button", { name: "Apply", exact: true }).click();
       await p

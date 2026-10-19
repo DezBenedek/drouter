@@ -1,0 +1,12 @@
+// Deliberately small Pico foundation. No dashboard, grid, card, nav or modal modules.
+@use "../cloud/node_modules/@picocss/pico/scss/settings" with (
+  $enable-responsive-typography: false,
+  $enable-viewport: false
+);
+@use "../cloud/node_modules/@picocss/pico/scss/layout/document";
+@use "../cloud/node_modules/@picocss/pico/scss/content/button";
+@use "../cloud/node_modules/@picocss/pico/scss/content/link";
+@use "../cloud/node_modules/@picocss/pico/scss/content/misc";
+@use "../cloud/node_modules/@picocss/pico/scss/forms/basics";
+@use "../cloud/node_modules/@picocss/pico/scss/utilities/accessibility";
+@use "../cloud/node_modules/@picocss/pico/scss/utilities/reduce-motion";

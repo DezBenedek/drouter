@@ -1,6 +1,10 @@
 import {
   mountControl,
   mountSimple,
+  toggleEvent,
+  confirmChange,
+  toast,
+  dismissToast,
 } from "../../../firmware/web/shared/control.js";
 import { installLocalization } from "../../../firmware/web/shared/i18n.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -9,7 +13,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
-  Check,
   ChevronRight,
   GripVertical,
   ListVideo,
@@ -63,6 +66,11 @@ const pages = [
   { name: "Presets", icon: ListVideo },
   { name: "Settings", icon: SettingsIcon },
 ];
+function useFeedback(message: string, kind: string) {
+  useEffect(() => {
+    if (message) toast(message, kind);
+  }, [message, kind]);
+}
 function App() {
   const [session, setSession] = useState<{
       client: DeviceClient;
@@ -72,8 +80,10 @@ function App() {
     [busy, setBusy] = useState(false),
     [appearance, setAppearance] = useState(theme());
   const [restricted, setRestricted] = useState<DeviceClient | null>(null);
+  useFeedback(error, "error");
   const initialName = new URLSearchParams(location.search).get("device") || "";
   function disconnect(message = "") {
+    dismissToast();
     if (session) {
       session.client.onDisconnect = () => {};
       session.client.close();
@@ -103,11 +113,6 @@ function App() {
         </div>
         <h1>Connect to your DRouter</h1>
         <p>Enter your device name and password.</p>
-        {error && (
-          <div className="notice error" role="alert">
-            {error}
-          </div>
-        )}
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -187,20 +192,16 @@ function Workspace({
 }) {
   const [data, setData] = useState(initial),
     [page, setPage] = useState("Routing"),
+    [more, setMore] = useState(false),
+    [eventBusy, setEventBusy] = useState(false),
     [section, setSection] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState(""),
     [error, setError] = useState(""),
     [dialog, setDialog] = useState<DialogSpec | null>(null),
-    [picker, setPicker] = useState<Receiver | null>(null),
-    [sourceSearch, setSourceSearch] = useState(""),
-    [outputSearch, setOutputSearch] = useState(""),
-    [pending, setPending] = useState<{ id: string; source: string } | null>(
-      null,
-    ),
-    [routeError, setRouteError] = useState<
-      Record<string, { message: string; source: string }>
-    >({});
+    [outputSearch, setOutputSearch] = useState("");
+  useFeedback(error, "error");
+  useFeedback(message, "success");
   const working = useRef(false);
   const drag = useRef<string | null>(null);
   async function refresh() {
@@ -212,7 +213,13 @@ function Workspace({
     client.onDisconnect = () =>
       logout("Device disconnected. Reconnect to view live routing.");
     const timer = setInterval(() => {
-      if (!working.current && document.visibilityState === "visible") {
+      if (
+        !working.current &&
+        !["Routing", "Sources", "Simple Modes"].includes(page) &&
+        !(page === "Settings" && section === "Access Control") &&
+        !document.querySelector("form:focus-within") &&
+        document.visibilityState === "visible"
+      ) {
         working.current = true;
         void refresh()
           .catch(() => {})
@@ -220,11 +227,24 @@ function Workspace({
             working.current = false;
           });
       }
-    }, 20000);
+    }, 10000);
     return () => {
       clearInterval(timer);
       client.onDisconnect = () => {};
     };
+  }, [page, section]);
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const info = (event as CustomEvent).detail;
+      setData((old) =>
+        old.info.revision === info.revision &&
+        old.info.event_mode === info.event_mode
+          ? old
+          : { ...old, info },
+      );
+    };
+    document.addEventListener("drouter-info", receive);
+    return () => document.removeEventListener("drouter-info", receive);
   }, []);
   async function act(task: () => Promise<void>, close = true) {
     if (working.current) return;
@@ -251,28 +271,6 @@ function Workspace({
     setDialog(spec);
   }
   const call = (op: string, params: unknown = {}) => client.call(op, params);
-  async function route(receiver: Receiver, source: string) {
-    setPicker(null);
-    setPending({ id: receiver.config.id, source });
-    setRouteError((old) => {
-      const next = { ...old };
-      delete next[receiver.config.id];
-      return next;
-    });
-    await act(async () => {
-      try {
-        await call("route.set", { receiver: receiver.config.id, source });
-        setMessage(`${receiver.config.label} switched to ${source}.`);
-      } catch (e) {
-        setRouteError((old) => ({
-          ...old,
-          [receiver.config.id]: { source, message: (e as Error).message },
-        }));
-        throw e;
-      }
-    }, false);
-    setPending(null);
-  }
   function savePreset() {
     open({
       title: "Save current routing",
@@ -296,14 +294,16 @@ function Workspace({
   function applyPreset(p: Preset) {
     const perform = async () => {
       const result = await call("presets.apply", { id: p.id });
-      setMessage(
-        result.results
-          .map(
-            (x: any) =>
-              `${data.receivers.find((r) => r.config.id === x.receiver)?.config.label || x.receiver}: ${x.ok ? "Verified" : x.error}`,
-          )
-          .join("\n"),
-      );
+      const report = result.results
+        .map(
+          (x: any) =>
+            `${data.receivers.find((r) => r.config.id === x.receiver)?.config.label || x.receiver}: ${x.ok ? "Verified" : x.error}`,
+        )
+        .join("\n");
+      if (result.results.some((x: any) => !x.ok)) {
+        setError(report);
+        setMessage("");
+      } else setMessage(report);
     };
     if (p.routes.length > 1)
       open({
@@ -422,14 +422,20 @@ function Workspace({
       await call(op, { ...params, confirm_disconnect: true });
     };
     if (
+      op === "wifi.remove" ||
       needsWifiWarning(
         op === "wifi.connect" ? data.network.wifi.active : profile.id,
       )
     )
       open({
-        title: "Change the active Wi-Fi connection?",
+        title:
+          op === "wifi.remove"
+            ? "Remove network?"
+            : "Change the active Wi-Fi connection?",
         description:
-          "Remote access may disconnect. Keep local Ethernet or the physical recovery process available before continuing.",
+          op === "wifi.remove" && !needsWifiWarning(profile.id)
+            ? "This removes the saved network and its password."
+            : "Remote access may disconnect. Keep local Ethernet or the physical recovery process available before continuing.",
         body: (
           <p className="secondary">
             Your saved routing and presets stay on the device.
@@ -576,10 +582,6 @@ function Workspace({
       .toLowerCase()
       .includes(outputSearch.toLowerCase()),
   );
-  const filteredSources = data.sources.filter((s) =>
-    s.name.toLowerCase().includes(sourceSearch.toLowerCase()),
-  );
-  const allOnline = data.receivers.filter((r) => r.state.online).length;
   const settingsSections = [
     "General",
     "Access Control",
@@ -639,13 +641,30 @@ function Workspace({
       <header className="app-topbar">
         <Brand />
         <div className="app-device">
-          <strong>{data.info.name}</strong>
+          <strong data-user-content>{data.info.name}</strong>
           <span className="secondary">Remote control</span>
         </div>
         <div className="topbar-actions">
-          <span className="event-indicator" hidden={!data.info.event_mode}>
-            Event Mode
-          </span>
+          <Button
+            className="event-toggle"
+            role="switch"
+            aria-label="Event Mode"
+            aria-checked={!!data.info.event_mode}
+            disabled={eventBusy || busy}
+            onClick={async () => {
+              setEventBusy(true);
+              try {
+                await toggleEvent(client);
+              } catch (e) {
+                setError((e as Error).message);
+              } finally {
+                setEventBusy(false);
+              }
+            }}
+          >
+            <span>Event Mode</span>
+            <span className="switch-track" aria-hidden="true" />
+          </Button>
           <span className="connection">
             <span className="status-dot" />
             Live device connection
@@ -670,9 +689,11 @@ function Workspace({
         {pages.map((p) => (
           <Button
             key={p.name}
+            data-nav={p.name}
             aria-current={page === p.name ? "page" : undefined}
             onClick={() => {
               setPage(p.name);
+              setMore(false);
               setSection(null);
               setError("");
               setMessage("");
@@ -682,24 +703,75 @@ function Workspace({
             <span>{p.name}</span>
           </Button>
         ))}
+        <Button
+          className="mobile-more"
+          aria-expanded={more}
+          aria-current={
+            ["Devices", "Simple Modes"].includes(page) ? "page" : undefined
+          }
+          onClick={() => setMore(!more)}
+        >
+          <MoreHorizontal />
+          <span>More</span>
+        </Button>
         <div className="nav-footer">
           Standalone by design
           <br />
           DRouter {data.info.version}
         </div>
       </nav>
+      {more && (
+        <div className="more-menu">
+          {pages
+            .filter((p) => ["Devices", "Simple Modes"].includes(p.name))
+            .map((p) => (
+              <Button
+                key={p.name}
+                onClick={() => {
+                  setPage(p.name);
+                  setMore(false);
+                  setError("");
+                  setMessage("");
+                }}
+              >
+                <p.icon />
+                <span>{p.name}</span>
+              </Button>
+            ))}
+          <Button
+            onClick={() => {
+              setPage("Settings");
+              setSection("Wi-Fi");
+              setMore(false);
+            }}
+          >
+            <SettingsIcon />
+            Wi-Fi
+          </Button>
+          <div className="more-preferences">
+            <span data-language-host />
+            <Button variant="quiet" onClick={changeTheme}>
+              Change appearance
+            </Button>
+          </div>
+        </div>
+      )}
       <main id="main" className="app-main">
         <header className="page-header">
           <div className="page-heading">
             <h1>{page}</h1>
             <p className="secondary">
               {page === "Routing"
-                ? `${allOnline} of ${data.receivers.length} outputs online · ${data.sources.length} sources`
+                ? "Select a source for each output"
                 : page === "Devices"
                   ? "BirdDog receivers on your network"
                   : page === "Presets"
                     ? "Routing arrangements saved on this device"
-                    : "Device preferences and connectivity"}
+                    : page === "Sources"
+                      ? "Choose the sources that appear in Routing"
+                      : page === "Simple Modes"
+                        ? "Focused controls for your team"
+                        : "Device preferences and connectivity"}
             </p>
           </div>
           <div className="page-actions">
@@ -739,16 +811,6 @@ function Workspace({
             )}
           </div>
         </header>
-        {error && !dialog && (
-          <div className="notice error" role="alert">
-            {error}
-          </div>
-        )}
-        {message && (
-          <div className="notice success" role="status">
-            {message}
-          </div>
-        )}
         {page === "Routing" && <SharedControl client={client} page="Routing" />}
         {["Sources", "Simple Modes"].includes(page) && (
           <SharedControl key={page} client={client} page={page} />
@@ -793,7 +855,7 @@ function Workspace({
               {filteredReceivers.map((r) => (
                 <div className="list-row" key={r.config.id}>
                   <div className="list-main">
-                    <strong>{r.config.label}</strong>
+                    <strong data-user-content>{r.config.label}</strong>
                     <span className="secondary">
                       {r.model || "BirdDog decoder"}
                       <span className="mobile-only mobile-address">
@@ -808,13 +870,26 @@ function Workspace({
                   <span className="route-name secondary">
                     {r.state.source || "Unavailable"}
                   </span>
-                  <Button
-                    variant="quiet icon-button"
-                    aria-label={`Details for ${r.config.label}`}
-                    onClick={() => deviceDetail(r)}
-                  >
-                    <MoreHorizontal />
-                  </Button>
+                  <div className="row-actions">
+                    <Button
+                      onClick={() =>
+                        rename("receivers", r.config.id, r.config.label)
+                      }
+                    >
+                      Rename
+                    </Button>
+                    <Button variant="quiet" onClick={() => deviceDetail(r)}>
+                      Details
+                    </Button>
+                    <Button
+                      variant="quiet danger"
+                      onClick={() =>
+                        remove("receivers", r.config.id, r.config.label)
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -855,34 +930,17 @@ function Workspace({
                   <Button disabled={busy} onClick={() => applyPreset(p)}>
                     Apply
                   </Button>
-                  <Button
-                    variant="quiet icon-button"
-                    aria-label={`Edit ${p.name}`}
-                    onClick={() =>
-                      open({
-                        title: p.name,
-                        body: (
-                          <div className="inline-actions">
-                            <Button
-                              onClick={() => rename("presets", p.id, p.name)}
-                            >
-                              Rename
-                            </Button>
-                            <Button
-                              variant="danger"
-                              onClick={() => remove("presets", p.id, p.name)}
-                            >
-                              Delete
-                            </Button>
-                          </div>
-                        ),
-                        action: "Done",
-                        submit: async () => {},
-                      })
-                    }
-                  >
-                    <MoreHorizontal />
-                  </Button>
+                  <div className="row-actions">
+                    <Button onClick={() => rename("presets", p.id, p.name)}>
+                      Rename
+                    </Button>
+                    <Button
+                      variant="quiet danger"
+                      onClick={() => remove("presets", p.id, p.name)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -991,6 +1049,13 @@ function Workspace({
                           new FormData(e.currentTarget),
                         );
                         void act(async () => {
+                          if (
+                            !(await confirmChange(
+                              "Change network settings?",
+                              "This may interrupt your connection. Keep local Ethernet or physical recovery access available.",
+                            ))
+                          )
+                            return;
                           await call("settings.update", {
                             expected_revision: data.info.revision,
                             ethernet: Object.fromEntries(
@@ -1075,7 +1140,7 @@ function Workspace({
                           <GripVertical className="wifi-drag" />
                           <span className="priority">{index + 1}</span>
                           <div className="wifi-copy">
-                            <strong>{w.ssid}</strong>
+                            <strong data-user-content>{w.ssid}</strong>
                             <span className="secondary">
                               {data.network.wifi.active === w.id &&
                               data.network.wifi.connected
@@ -1124,45 +1189,22 @@ function Workspace({
                               }
                             />
                             <Button
-                              variant="quiet icon-button"
-                              aria-label={`More options for ${w.ssid}`}
+                              variant="quiet"
+                              disabled={busy || !w.enabled}
                               onClick={() =>
-                                open({
-                                  title: w.ssid,
-                                  body: (
-                                    <div className="inline-actions">
-                                      <Button
-                                        disabled={!w.enabled}
-                                        onClick={() =>
-                                          wifiChange(
-                                            "wifi.connect",
-                                            { id: w.id },
-                                            w,
-                                          )
-                                        }
-                                      >
-                                        Reconnect
-                                      </Button>
-                                      <Button
-                                        variant="danger"
-                                        onClick={() =>
-                                          wifiChange(
-                                            "wifi.remove",
-                                            { id: w.id },
-                                            w,
-                                          )
-                                        }
-                                      >
-                                        Remove
-                                      </Button>
-                                    </div>
-                                  ),
-                                  action: "Done",
-                                  submit: async () => {},
-                                })
+                                wifiChange("wifi.connect", { id: w.id }, w)
                               }
                             >
-                              <MoreHorizontal />
+                              Reconnect
+                            </Button>
+                            <Button
+                              variant="quiet danger"
+                              disabled={busy}
+                              onClick={() =>
+                                wifiChange("wifi.remove", { id: w.id }, w)
+                              }
+                            >
+                              Remove
                             </Button>
                           </div>
                         </div>
@@ -1357,14 +1399,6 @@ function Workspace({
           </div>
         )}
       </main>
-      {picker && (
-        <SourcePicker
-          receiver={picker}
-          sources={data.sources}
-          onClose={() => setPicker(null)}
-          onChoose={(s) => void route(picker, s)}
-        />
-      )}{" "}
       {dialog && (
         <Modal
           key={dialog.title}
@@ -1401,11 +1435,6 @@ function Workspace({
               void act(() => dialog.submit(f));
             }}
           >
-            {error && (
-              <div className="notice error" role="alert">
-                {error}
-              </div>
-            )}
             {dialog.body}
           </form>
         </Modal>
@@ -1430,61 +1459,6 @@ function PresetRoutes({ preset, data }: { preset: Preset; data: Snapshot }) {
         </div>
       ))}
     </div>
-  );
-}
-function SourcePicker({
-  receiver,
-  sources,
-  onChoose,
-  onClose,
-}: {
-  receiver: Receiver;
-  sources: { name: string }[];
-  onChoose: (s: string) => void;
-  onClose: () => void;
-}) {
-  const [search, setSearch] = useState("");
-  const filtered = sources.filter((s) =>
-    s.name.toLowerCase().includes(search.toLowerCase()),
-  );
-  return (
-    <Modal
-      source
-      title="Choose a source"
-      description={receiver.config.label}
-      onClose={onClose}
-    >
-      <div className="source-search">
-        <SearchField
-          label="Search available sources"
-          placeholder="Search sources"
-          value={search}
-          onChange={setSearch}
-        />
-      </div>
-      <p className="source-current">
-        Current: {receiver.state.source || "No source"}
-      </p>
-      <div className="source-list">
-        {filtered.map((s) => (
-          <Button
-            key={s.name}
-            className={`source-option ${s.name === receiver.state.source ? "active" : ""}`}
-            onClick={() => onChoose(s.name)}
-            aria-pressed={s.name === receiver.state.source}
-          >
-            <span className="source-name">{s.name}</span>
-            {s.name === receiver.state.source && <Check />}
-          </Button>
-        ))}
-        {!filtered.length && (
-          <Empty
-            title="No matching sources"
-            description="Try a shorter search or refresh sources."
-          />
-        )}
-      </div>
-    </Modal>
   );
 }
 createRoot(document.getElementById("root")!).render(<App />);
