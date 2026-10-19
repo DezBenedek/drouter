@@ -1,0 +1,15 @@
+/target/
+/.embuild/
+/.tools/
+/.drouter-state/
+/cloud/node_modules/
+/cloud/dist/
+/cloud/.wrangler/
+/cloud/playwright-report/
+/cloud/test-results/
+/firmware/sdkconfig
+/firmware/sdkconfig.old
+/firmware/sdkconfig.*.old
+/firmware/target/
+/export-esp.sh
+/.DS_Store

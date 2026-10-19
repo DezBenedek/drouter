@@ -1,0 +1,40 @@
+export const MAX_MESSAGE = 32768;
+export type Frame = { type: string; [key: string]: unknown };
+export function parseFrame(message: string | ArrayBuffer): Frame {
+  if (
+    typeof message !== "string" ||
+    new TextEncoder().encode(message).length > MAX_MESSAGE
+  )
+    throw new Error("Invalid frame");
+  const value = JSON.parse(message);
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    typeof value.type !== "string"
+  )
+    throw new Error("Invalid frame");
+  return value;
+}
+export function validClientFrame(frame: Frame, stage: string): boolean {
+  if (stage === "new")
+    return (
+      frame.type === "auth.start" &&
+      typeof frame.a === "string" &&
+      /^[a-f0-9]{2,512}$/i.test(frame.a)
+    );
+  if (stage === "challenge" || stage === "fake")
+    return (
+      frame.type === "auth.proof" &&
+      typeof frame.proof === "string" &&
+      /^[a-f0-9]{64}$/i.test(frame.proof)
+    );
+  return (
+    stage === "authorized" &&
+    frame.type === "rpc" &&
+    Number.isSafeInteger(frame.seq) &&
+    typeof frame.data === "string" &&
+    frame.data.length <= 30000 &&
+    /^[a-f0-9]+$/i.test(frame.data)
+  );
+}
