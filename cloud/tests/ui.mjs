@@ -1,6 +1,77 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { chromium } from "@playwright/test";
+export async function checkRemoteAccess({ local, password, root }) {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const p = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const errors = [];
+    p.on("pageerror", (error) => errors.push(error.message));
+    const connect = async () => {
+      await p.getByLabel("Password", { exact: true }).fill(password);
+      await p.getByRole("button", { name: "Connect", exact: true }).click();
+      await p.locator(".app-shell").waitFor();
+    };
+    await p.goto(local);
+    await connect();
+    for (const enabled of [false, true]) {
+      await p.getByRole("button", { name: "Settings", exact: true }).click();
+      await p
+        .getByRole("button", { name: "Remote Access", exact: true })
+        .click();
+      const toggle = p.getByRole("switch", {
+        name: "Enable remote access",
+        exact: true,
+      });
+      assert.equal(await toggle.isChecked(), !enabled);
+      await toggle.click();
+      await p
+        .getByRole("dialog")
+        .getByRole("button", { name: "Confirm", exact: true })
+        .click();
+      await p
+        .getByRole("heading", { name: "Connect to your DRouter", exact: true })
+        .waitFor();
+      await p
+        .locator('.toast[data-kind="success"]')
+        .getByText("Remote access updated. Reconnect to continue.", {
+          exact: true,
+        })
+        .waitFor();
+      assert.equal(
+        await p
+          .getByText("Device unavailable or session expired. Connect again.", {
+            exact: true,
+          })
+          .count(),
+        0,
+      );
+      await connect();
+    }
+    await p.getByRole("button", { name: "Settings", exact: true }).click();
+    await p.getByRole("button", { name: "Remote Access", exact: true }).click();
+    await p
+      .locator(".settings-section")
+      .getByText("Connected", { exact: true })
+      .waitFor({ timeout: 60000 });
+    assert.equal(
+      await p.evaluate(() => document.documentElement.scrollWidth > innerWidth),
+      false,
+    );
+    await p.screenshot({
+      path: `${root}/docs/screenshots/local-remote-access-mobile.png`,
+    });
+    await p.getByRole("button", { name: "Settings", exact: true }).click();
+    await p.getByRole("button", { name: "Security", exact: true }).click();
+    await p
+      .getByText("Sessions expire after 24 hours", { exact: true })
+      .waitFor();
+    assert.deepEqual(errors, []);
+    await p.getByRole("button", { name: "Disconnect", exact: true }).click();
+  } finally {
+    await browser.close();
+  }
+}
 export async function checkSetup({ local, password, root }) {
   const browser = await chromium.launch({ headless: true });
   try {

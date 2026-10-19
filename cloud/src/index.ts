@@ -32,6 +32,10 @@ export default {
         const lookup = await registry(env).fetch(
           `https://registry.internal/lookup?name=${match[1]}`,
         );
+        if (!lookup.ok)
+          return new Response("Remote service temporarily unavailable", {
+            status: 503,
+          });
         const record = (await lookup.json()) as DeviceRecord | null;
         deviceId =
           record?.device_id ||

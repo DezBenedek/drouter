@@ -6,7 +6,7 @@ The macOS simulator runs the same authentication, validation, routing, preset, W
 
 ![Remote routing interface](docs/screenshots/remote-routing.png)
 
-Latest release: [v0.2.0](https://github.com/DezBenedek/drouter/releases/tag/v0.2.0) · [ESP32-S3 firmware image](https://github.com/DezBenedek/drouter/releases/download/v0.2.0/drouter-esp32s3.bin) · [SHA256SUMS](https://github.com/DezBenedek/drouter/releases/download/v0.2.0/SHA256SUMS).
+Latest release: [v0.2.1](https://github.com/DezBenedek/drouter/releases/tag/v0.2.1) · [ESP32-S3 firmware image](https://github.com/DezBenedek/drouter/releases/download/v0.2.1/drouter-esp32s3.bin) · [SHA256SUMS](https://github.com/DezBenedek/drouter/releases/download/v0.2.1/SHA256SUMS).
 
 ## Repository
 
@@ -68,13 +68,13 @@ Open **http://127.0.0.1:5173**. Vite proxies relay WebSockets to Wrangler. The d
 
 Device names use 3–32 lowercase ASCII letters, digits, and single hyphens. Remote login requires only this name and the device password. An immutable device ID is the SHA-256 digest of its Ed25519 public key. The private key stays in encrypted device configuration.
 
-A separate SQLite Durable Object reserves each name permanently to its device ID/public key, even while offline. Registration and reconnection require a fresh, signed challenge covering the identity and requested name. Renaming preserves the ID and reserves the previous name as an alias; another identity cannot claim either name. Collisions appear in Remote Access settings. Local setup and routing still work if reservation is unavailable.
+A separate SQLite Durable Object reserves each name permanently to its device ID/public key, even while offline. Registration and reconnection require a fresh, signed challenge covering the identity and requested name. Renaming preserves the ID and reserves the previous name as an alias; another identity cannot claim either name. Remote Access settings distinguish occupied names, an identity already running in another instance, rejected identities, and temporary registration-service failures. Network/storage failures do not mean the name is taken. Retries are automatic, and changing the name/server/access setting interrupts retry backoff within one second. Local setup and routing still work if reservation is unavailable.
 
 Before resetting or replacing a device, use **local Settings → Security → Export recovery file**. Keep that private file offline and secure: it proves ownership of your names. After provisioning a replacement, use **Restore identity**, supply the file and reserved name, and create a new password. Recovery never uses a cloud password database. Without the original private identity or a recovery file, reserved names cannot be reclaimed; choose a new name. Factory reset cannot release or transfer a reservation. Schema-one configurations migrate in place without replacing their identity, verifier, Wi-Fi order, receivers, or presets.
 
 The browser authenticates directly to the device using the same RustCrypto SRP implementation on both sides. Password hardening uses PBKDF2-HMAC-SHA256; the device stores only salt and SRP verifier. Application commands and responses use directional AES-GCM keys derived from the SRP session. Cloudflare sees neither passwords, verifiers nor plaintext configuration updates. Browser memory is temporary; only appearance and language preferences are stored in localStorage; cloud SQLite contains the minimal public identity registry. See [the full protocol and trust boundary](protocol/README.md).
 
-Sessions expire after 30 minutes. Wi-Fi/security/settings mutations require authentication within the last five minutes; reconnect to authorize them again. **Revoke all sessions** works locally and remotely. Changing the password or disabling Cloud access revokes sessions. A lost administrator password requires physical factory reset, which erases user data; the relay cannot reset it while retaining access.
+Sessions expire after 24 hours while the interface remains open. Closing/reloading it or losing the device connection still requires a fresh login; passwords and session keys are not persisted in browser storage. Wi-Fi/security/settings mutations require authentication within the last five minutes; reconnect to authorize them again. **Revoke all sessions** works locally and remotely. Changing the password or disabling Cloud access revokes sessions. A lost administrator password requires physical factory reset, which erases user data; the relay cannot reset it while retaining access.
 
 ## Interface
 
@@ -239,15 +239,15 @@ npx wrangler login
 npm run deploy
 ```
 
-This creates one Worker, the live relay class, and the separate SQLite registry class using the additive `v2-registry` migration. Preserve the existing `v1` migration on upgrades. The operator needs a Cloudflare account; end users do not. Use the Worker hostname as a local device advanced override during self-hosted testing. To serve the default production address, configure `drouter.dezso.hu` as the Worker's custom domain in Cloudflare. DNS ownership and deployment credentials are required for that operator step. The production domain has not been provisioned by this repository task.
+This creates one Worker, the live relay class, and the separate SQLite registry class using the additive `v2-registry` migration. Preserve the existing `v1` migration on upgrades. The operator needs a Cloudflare account; end users do not. Use the Worker hostname as a local device advanced override during self-hosted testing. The production address is `https://drouter.dezso.hu`. The checked-in Worker route binds `drouter.dezso.hu/*` to DRouter through the existing `okosurlap.hu` Cloudflare for SaaS zone; its external CNAME points to `customers.okosurlap.hu`. Preserve this route and the existing custom-hostname/TLS setup on deployment; `dezso.hu` does not need to move DNS providers.
 
-The current deployed Worker is **https://drouter.dezbenedek.workers.dev**. A simulator running on localhost can connect directly to this public relay through outbound WSS; no router port forwarding or tunnel is required. In **local Settings → Remote Access → Advanced · custom server**, set this HTTPS origin, enable remote access and reconnect after authentication is renewed. Open the public Worker URL for remote control using the local device's name and password. The Mac and simulator must remain running. The default custom hostname `drouter.dezso.hu` has not been moved to this Worker.
+The production interface is **https://drouter.dezso.hu**; **https://drouter.dezbenedek.workers.dev** remains a compatible alternate origin. A simulator running on localhost can connect directly to this public relay through outbound WSS; no router port forwarding or tunnel is required. In **local Settings → Remote Access → Advanced · custom server**, set this HTTPS origin, enable remote access and reconnect after authentication is renewed. Open the public Worker URL for remote control using the local device's name and password. The Mac and simulator must remain running. The default device server already uses `https://drouter.dezso.hu`; no advanced override is needed for production.
 
 An explicit live verification command is available after building the simulator:
 
 ```sh
 cd cloud
-DROUTER_LIVE_ORIGIN=https://drouter.dezbenedek.workers.dev node tests/live-relay-check.mjs
+DROUTER_LIVE_ORIGIN=https://drouter.dezso.hu node tests/live-relay-check.mjs
 ```
 
 This uses an isolated temporary simulator on ports 18081/19011/19012 and verifies real public-relay administrator/Simple Mode login, fixed BirdDog routing, Event Mode, and the mobile browser interface. It leaves only a randomly named minimal `deploy-check-*` device registration in the production registry, as permanent name reservation requires; temporary local credentials/state and processes are removed. It does not change the existing local device configuration. This command is deliberately separate from the ordinary integration suite.

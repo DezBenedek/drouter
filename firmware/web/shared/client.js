@@ -4,6 +4,24 @@ export const randomId = () =>
   Array.from(crypto.getRandomValues(new Uint8Array(8)), (x) =>
     x.toString(16).padStart(2, "0"),
   ).join("");
+export function remoteStatus(state) {
+  return (
+    {
+      connected: "Connected",
+      connecting: "Connecting…",
+      disabled: "Disabled",
+      offline: "Waiting for connection",
+      name_unavailable:
+        "Name belongs to another device. Choose another name or restore its identity.",
+      registry_unavailable:
+        "Registration service unavailable. Retrying automatically.",
+      identity_in_use:
+        "This device identity is already connected. Stop its other instance.",
+      identity_rejected:
+        "Device identity could not be verified. Check the identity recovery file.",
+    }[state] || "Waiting for connection"
+  );
+}
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const unhex = (s) =>
@@ -50,6 +68,7 @@ export class Client {
         }
       };
       ws.onclose = () => {
+        this.key?.fill(0);
         this.key = null;
         this.waiters
           .splice(0)

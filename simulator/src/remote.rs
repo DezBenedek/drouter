@@ -1,7 +1,7 @@
 use crate::Shared;
 use drouter::{
     config::MAX_MESSAGE,
-    remote::{registration, Backoff},
+    remote::{registration, registration_error, registration_failed, same_connection, Backoff},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -23,7 +23,13 @@ pub async fn run(shared: Shared) {
                 .filter(|c| c.cloud_enabled)
         };
         let Some(config) = config else {
-            shared.device.lock().await.network.cloud = "disabled".into();
+            {
+                let mut device = shared.device.lock().await;
+                if device.network.cloud != "disabled" {
+                    eprintln!("DRouter remote: disabled");
+                }
+                device.network.cloud = "disabled".into();
+            }
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         };
@@ -34,7 +40,6 @@ pub async fn run(shared: Shared) {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
-        let name = config.remote_name();
         let url = format!(
             "{}/relay/{}/device",
             config
@@ -47,12 +52,17 @@ pub async fn run(shared: Shared) {
         let limits = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE))
             .max_frame_size(Some(MAX_MESSAGE));
-        if let Ok(Ok((mut ws, _))) = tokio::time::timeout(
+        let connection = tokio::time::timeout(
             Duration::from_secs(10),
             connect_async_with_config(url, Some(limits), false),
         )
-        .await
-        {
+        .await;
+        match &connection {
+            Ok(Err(error)) => eprintln!("DRouter remote connection: {error}"),
+            Err(_) => eprintln!("DRouter remote connection timed out"),
+            _ => {}
+        }
+        if let Ok(Ok((mut ws, _))) = connection {
             let mut registered = false;
             let mut remote_sessions = std::collections::BTreeSet::new();
             let connected = std::time::Instant::now();
@@ -60,7 +70,7 @@ pub async fn run(shared: Shared) {
             loop {
                 tokio::select! {
                     _ = timer.tick() => {
-                        let valid = { let d = shared.device.lock().await; d.config.as_ref().is_some_and(|c| c.cloud_enabled && c.remote_name() == name && c.device_id() == config.device_id() && c.server == config.server) && d.network.online() };
+                        let valid = { let d = shared.device.lock().await; d.config.as_ref().is_some_and(|c| c.cloud_enabled && same_connection(c, &config)) && d.network.online() };
                         if !valid || !shared.cloud_up.load(std::sync::atomic::Ordering::Relaxed) || !registered && connected.elapsed().as_secs() > 10 { let _ = ws.close(None).await; break; }
                         if registered && connected.elapsed().as_secs() > 30 { backoff.reset(); }
                     },
@@ -71,8 +81,8 @@ pub async fn run(shared: Shared) {
                                 let Ok(v) = serde_json::from_str::<Value>(&text) else { break; };
                                 let outgoing = match v["type"].as_str() {
                                     Some("challenge") => Some(registration(&config, v["nonce"].as_str().unwrap_or(""))),
-                                    Some("registered") => { registered=true;let mut d=shared.device.lock().await;d.network.cloud="connected".into();d.network.registered_name=v["name"].as_str().map(str::to_string);d.network.last_cloud_connection=Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());None },
-                                    Some("registration.error") => {shared.device.lock().await.network.cloud="name_unavailable".into(); None},
+                                    Some("registered") => { registered=true;let mut d=shared.device.lock().await;d.network.cloud="connected".into();d.network.registered_name=v["name"].as_str().map(str::to_string);d.network.last_cloud_connection=Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());eprintln!("DRouter remote: connected");None },
+                                    Some("registration.error") => {let state=registration_error(v["code"].as_str().unwrap_or(""));shared.device.lock().await.network.cloud=state.into();eprintln!("DRouter remote registration: {state}");break;},
                                     Some("forward") if registered => {
                                         let Some(sid) = v["sid"].as_str().filter(|s| s.len() == 36) else { break; };
                                         if remote_sessions.len()<8 {remote_sessions.insert(sid.to_string());}
@@ -101,10 +111,21 @@ pub async fn run(shared: Shared) {
         }
         {
             let mut d = shared.device.lock().await;
-            if d.network.cloud != "name_unavailable" {
+            if !registration_failed(&d.network.cloud) {
                 d.network.cloud = "offline".into();
             }
         }
-        tokio::time::sleep(Duration::from_secs(backoff.next_delay())).await;
+        for _ in 0..backoff.next_delay() {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let d = shared.device.lock().await;
+            if !d
+                .config
+                .as_ref()
+                .is_some_and(|c| same_connection(c, &config))
+            {
+                backoff.reset();
+                break;
+            }
+        }
     }
 }

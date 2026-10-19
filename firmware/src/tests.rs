@@ -337,10 +337,71 @@ fn authenticated_encryption_replay_expiry_and_revocation() {
     assert_eq!(d.frame(sid, frame.clone(), false)["type"], "error");
     assert!(d
         .auth
-        .decrypt(sid, &json!({"seq":2,"data":"00"}), 1801)
+        .decrypt(
+            sid,
+            &json!({"seq":2,"data":"00"}),
+            crate::auth::SESSION_SECONDS
+        )
         .is_err());
     d.auth.revoke();
     assert_eq!(d.frame(sid, frame, false)["type"], "error");
+}
+#[test]
+fn full_day_sessions_keep_expiry_elevation_replay_and_revocation_guards() {
+    let credential = drouter_auth::Credential::new("correct horse battery").unwrap();
+    let mut auth = crate::auth::Auth::default();
+    let mut login = drouter_auth::Login::new();
+    let sid = "012345678901234567890123456789012345";
+    let start = 100;
+    let challenge = auth
+        .start(sid, &login.public_key(), &credential, start)
+        .unwrap();
+    let proof = login.respond(
+        "correct horse battery",
+        challenge["salt"].as_str().unwrap(),
+        challenge["b"].as_str().unwrap(),
+    );
+    let ok = auth.prove(sid, &proof, start).unwrap();
+    assert_eq!(ok["expiresIn"], 86400);
+    let key = hex::decode(login.finish(ok["proof"].as_str().unwrap())).unwrap();
+    assert!(auth.elevated(sid, start + 299));
+    assert!(!auth.elevated(sid, start + 300));
+    let packet = json!({"v":1,"id":"1","op":"device.info","params":{}});
+    let frame = json!({"seq":1,"data":hex::encode(crypt(true, &key, sid, 1, packet.to_string().as_bytes(), false).unwrap())});
+    assert_eq!(auth.decrypt(sid, &frame, start + 3600).unwrap(), packet);
+    assert!(auth.decrypt(sid, &frame, start + 3601).is_err());
+    assert!(auth.role(sid, start + 86399).unwrap() == crate::auth::Role::Admin);
+    assert!(auth.role(sid, start + 86400).is_err());
+    let next = json!({"seq":2,"data":hex::encode(crypt(true, &key, sid, 2, packet.to_string().as_bytes(), false).unwrap())});
+    assert!(auth.decrypt(sid, &next, start + 86400).is_err());
+    auth.revoke();
+    assert!(auth.role(sid, start + 3600).is_err());
+    assert!(auth.decrypt(sid, &next, start + 3600).is_err());
+}
+#[test]
+fn remote_retry_tracks_connection_changes_and_distinguishes_registration_errors() {
+    use crate::remote::{registration_error, registration_failed, same_connection};
+    let config = Config::new("studio-router", "correct horse battery").unwrap();
+    let mut changed = config.clone();
+    assert!(same_connection(&config, &changed));
+    changed.name = "renamed-router".into();
+    assert!(!same_connection(&config, &changed));
+    changed = config.clone();
+    changed.server = "https://another.example".into();
+    assert!(!same_connection(&config, &changed));
+    changed = config.clone();
+    changed.cloud_enabled = !config.cloud_enabled;
+    assert!(!same_connection(&config, &changed));
+    for (code, expected) in [
+        ("name_unavailable", "name_unavailable"),
+        ("identity_in_use", "identity_in_use"),
+        ("invalid_identity", "identity_rejected"),
+        ("storage_error", "registry_unavailable"),
+    ] {
+        assert_eq!(registration_error(code), expected);
+        assert!(registration_failed(expected));
+    }
+    assert!(!registration_failed("connected"));
 }
 #[test]
 fn password_attempts_and_pending_sessions_are_bounded() {

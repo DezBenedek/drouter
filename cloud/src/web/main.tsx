@@ -26,7 +26,7 @@ import {
   SlidersHorizontal,
   Sun,
 } from "lucide-react";
-import { Client } from "../../../firmware/web/shared/client.js";
+import { Client, remoteStatus } from "../../../firmware/web/shared/client.js";
 import { theme, toggleTheme } from "../../../firmware/web/shared/theme.js";
 import "../../../firmware/web/shared/style.css";
 import {
@@ -80,9 +80,10 @@ function App() {
     [busy, setBusy] = useState(false),
     [appearance, setAppearance] = useState(theme());
   const [restricted, setRestricted] = useState<DeviceClient | null>(null);
-  useFeedback(error, "error");
+  const [feedbackKind, setFeedbackKind] = useState("error");
+  useFeedback(error, feedbackKind);
   const initialName = new URLSearchParams(location.search).get("device") || "";
-  function disconnect(message = "") {
+  function disconnect(message = "", kind = "error") {
     dismissToast();
     if (session) {
       session.client.onDisconnect = () => {};
@@ -92,6 +93,7 @@ function App() {
     setRestricted(null);
     setSession(null);
     setError(message);
+    setFeedbackKind(kind);
   }
   if (restricted)
     return <SimpleScreen client={restricted} logout={disconnect} />;
@@ -119,6 +121,7 @@ function App() {
             const f = new FormData(e.currentTarget);
             setBusy(true);
             setError("");
+            setFeedbackKind("error");
             const client = new Client();
             try {
               await client.open(
@@ -180,13 +183,13 @@ function App() {
 function Workspace({
   initial,
   client,
-  logout,
+  logout: leave,
   appearance,
   changeTheme,
 }: {
   initial: Snapshot;
   client: DeviceClient;
-  logout: (message?: string) => void;
+  logout: (message?: string, kind?: string) => void;
   appearance: string;
   changeTheme: () => void;
 }) {
@@ -203,6 +206,12 @@ function Workspace({
   useFeedback(error, "error");
   useFeedback(message, "success");
   const working = useRef(false);
+  const ended = useRef(false);
+  function logout(message = "", kind = "success") {
+    ended.current = true;
+    client.onDisconnect = () => {};
+    leave(message, kind);
+  }
   const drag = useRef<string | null>(null);
   async function refresh() {
     const next = await snapshot(client);
@@ -211,7 +220,7 @@ function Workspace({
   }
   useEffect(() => {
     client.onDisconnect = () =>
-      logout("Device disconnected. Reconnect to view live routing.");
+      logout("Device disconnected. Reconnect to view live routing.", "error");
     const timer = setInterval(() => {
       if (
         !working.current &&
@@ -254,9 +263,11 @@ function Workspace({
     setMessage("");
     try {
       await task();
+      if (ended.current) return;
       await refresh();
       if (close) setDialog(null);
     } catch (e) {
+      if (ended.current) return;
       setError((e as Error).message);
       try {
         await refresh();
@@ -1284,13 +1295,11 @@ function Workspace({
                     </SettingRow>
                     <SettingRow title="Cloud connection">
                       <span className="secondary">
-                        {data.network.cloud === "name_unavailable"
-                          ? "Name already reserved — choose another name"
-                          : data.network.cloud === "connected"
-                            ? "Connected"
-                            : data.info.cloud_enabled
-                              ? "Waiting for connection"
-                              : "Disabled"}
+                        {remoteStatus(
+                          data.info.cloud_enabled
+                            ? data.network.cloud
+                            : "disabled",
+                        )}
                       </span>
                     </SettingRow>
                     <SettingRow title="Registered name">
@@ -1329,7 +1338,7 @@ function Workspace({
                     </SettingRow>
                     <SettingRow
                       title="Active sessions"
-                      detail="Sessions expire automatically after 30 minutes"
+                      detail="Sessions expire automatically after 24 hours"
                     >
                       <Button
                         onClick={() =>

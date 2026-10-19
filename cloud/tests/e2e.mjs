@@ -11,7 +11,7 @@ import init from "../../firmware/web/shared/auth.js";
 import { Client } from "../../firmware/web/shared/client.js";
 import { checkOverhaul } from "./overhaul.mjs";
 import { modification3 } from "./modification3.mjs";
-import { checkInterfaces, checkSetup } from "./ui.mjs";
+import { checkInterfaces, checkSetup, checkRemoteAccess } from "./ui.mjs";
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -437,7 +437,7 @@ try {
   assert.equal((await registration(owner)).type, "registered");
   const proof = lastProof;
   const duplicate = await rawWs(deviceUrl(deviceId));
-  assert.equal((await registration(duplicate)).type, "error");
+  assert.equal((await registration(duplicate)).code, "identity_in_use");
   duplicate.ws.close();
   owner.ws.close();
   await delay(300);
@@ -650,6 +650,13 @@ print(json.dumps(out))`,
 
   remoteClient.close();
   localClient.close();
+  await checkRemoteAccess({ local, password, root });
+  remoteClient = await new Client().open(name, password);
+  assert.equal((await remoteClient.call("auth.session")).role, "admin");
+  remoteClient.close();
+  pass(
+    "mobile remote-access enable/disable reports confirmed changes, reconnects and shows 24-hour sessions",
+  );
   console.log(`\n${checks} integration checks passed.`);
 } catch (e) {
   console.error(e);

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.1] - 2026-10-19
+
+### Fixed
+
+- Recorded the production `drouter.dezso.hu/*` Worker route in deployment configuration. The default device address and public interface now share the verified HTTPS/WSS origin.
+- Registry storage/service failures no longer masquerade as occupied names. Remote Access shows separate English/Hungarian messages for ownership conflicts, temporary registry outages, rejected identities and a second instance using the same identity.
+- Configuration changes interrupt connection retry backoff within one second. Closing device sockets no longer block replacement connections, and delayed close events cannot disconnect browsers attached to a newer connection.
+- Removed the relay's forced daily device disconnect; browser authorization remains independently bounded and enforced by the device.
+- Local remote-access enable/disable reports the acknowledged change with a success notification before requesting reauthentication. Remote settings workflows stop refreshing a session after intentional logout. Toast entry animations retain full text contrast from the first frame.
+
+### Changed
+
+- Ordinary local and remote sessions last 24 hours instead of 30 minutes. The relay respects shorter lifetimes advertised by older firmware. Five-minute authorization for sensitive changes, logout, password/profile/session revocation, encrypted traffic and replay protection remain enforced.
+- Passwords and session keys remain temporary browser-memory data; closing/reloading the interface or losing the device connection still requires authentication.
+
 ## [0.2.0] - 2026-10-19
 
 Complete local and remote UI redesign, focused routing workflows, and shared Sonner-style notifications.
@@ -83,3 +98,5 @@ Physical ESP32/BirdDog interoperability, power-loss recovery, resource/latency m
 [0.1.0]: https://github.com/DezBenedek/drouter/releases/tag/v0.1.0
 
 [0.2.0]: https://github.com/DezBenedek/drouter/releases/tag/v0.2.0
+
+[0.2.1]: https://github.com/DezBenedek/drouter/releases/tag/v0.2.1

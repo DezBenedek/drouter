@@ -425,7 +425,6 @@ fn remote_loop(shared: Shared) {
             std::thread::sleep(Duration::from_secs(5));
             continue;
         }
-        let name = c.remote_name();
         let url = format!(
             "{}/relay/{}/device",
             c.server.replacen("https://", "wss://", 1),
@@ -467,12 +466,9 @@ fn remote_loop(shared: Shared) {
             loop {
                 let valid = {
                     let d = shared.lock().unwrap();
-                    d.config.as_ref().is_some_and(|x| {
-                        x.cloud_enabled
-                            && x.remote_name() == name
-                            && x.device_id() == c.device_id()
-                            && x.server == c.server
-                    })
+                    d.config
+                        .as_ref()
+                        .is_some_and(|x| x.cloud_enabled && remote::same_connection(x, &c))
                 };
                 if !valid || !registered && started.elapsed() > Duration::from_secs(15) {
                     break;
@@ -503,8 +499,14 @@ fn remote_loop(shared: Shared) {
                                 None
                             }
                             Some("registration.error") => {
-                                shared.lock().unwrap().network.cloud = "name_unavailable".into();
-                                None
+                                shared.lock().unwrap().network.cloud =
+                                    remote::registration_error(v["code"].as_str().unwrap_or(""))
+                                        .into();
+                                log::warn!(
+                                    "Remote registration: {}",
+                                    remote::registration_error(v["code"].as_str().unwrap_or(""))
+                                );
+                                break;
                             }
                             Some("forward") if registered => {
                                 let sid = v["sid"].as_str().unwrap_or("");
@@ -552,11 +554,22 @@ fn remote_loop(shared: Shared) {
         }
         {
             let mut d = shared.lock().unwrap();
-            if d.network.cloud != "name_unavailable" {
+            if !remote::registration_failed(&d.network.cloud) {
                 d.network.cloud = "offline".into();
             }
         }
-        std::thread::sleep(Duration::from_secs(backoff.next_delay()));
+        for _ in 0..backoff.next_delay() {
+            std::thread::sleep(Duration::from_secs(1));
+            let d = shared.lock().unwrap();
+            if !d
+                .config
+                .as_ref()
+                .is_some_and(|x| remote::same_connection(x, &c))
+            {
+                backoff.reset();
+                break;
+            }
+        }
     }
 }
 pub fn run() -> Result<()> {

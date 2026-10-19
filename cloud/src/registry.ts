@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
 import { remoteName, identityId } from "./auth";
+import { ReservationError, reservationFailure } from "./reservation";
 export type DeviceRecord = {
   device_id: string;
   name: string;
@@ -55,7 +56,7 @@ export class DeviceRegistry extends DurableObject<Env> {
           )
           .toArray()[0];
         if (reserved && reserved.device_id !== value.deviceId)
-          throw new Error("name_unavailable");
+          throw new ReservationError("name_unavailable");
         const existing = sql
           .exec<DeviceRecord>(
             "SELECT * FROM devices WHERE device_id=?",
@@ -63,7 +64,7 @@ export class DeviceRegistry extends DurableObject<Env> {
           )
           .toArray()[0];
         if (existing && existing.public_key !== value.publicKey)
-          throw new Error("invalid_identity");
+          throw new ReservationError("invalid_identity");
         const now = Date.now();
         if (!existing)
           sql.exec(
@@ -104,8 +105,8 @@ export class DeviceRegistry extends DurableObject<Env> {
           .one();
       });
       return Response.json(record);
-    } catch {
-      return Response.json({ error: "name_unavailable" }, { status: 409 });
+    } catch (error) {
+      return reservationFailure(error);
     }
   }
 }

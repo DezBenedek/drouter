@@ -2,7 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "./index";
 import { registry, type DeviceRecord } from "./registry";
 import { verifyRegistration } from "./auth";
-import { parseFrame, validClientFrame } from "./relay";
+import { parseFrame, validClientFrame, sessionSeconds } from "./relay";
 type Attachment = {
   role: "candidate" | "device" | "browser";
   name: string;
@@ -23,8 +23,13 @@ export class RouterRelay extends DurableObject<Env> {
   private attachment(ws: WebSocket): Attachment {
     return ws.deserializeAttachment() as Attachment;
   }
-  private device(): WebSocket | undefined {
-    return this.sockets().find((ws) => this.attachment(ws).role === "device");
+  private device(except?: WebSocket): WebSocket | undefined {
+    return this.sockets().find(
+      (ws) =>
+        ws !== except &&
+        ws.readyState === WebSocket.OPEN &&
+        this.attachment(ws).role === "device",
+    );
   }
   private send(ws: WebSocket, frame: unknown): void {
     ws.send(JSON.stringify(frame));
@@ -83,7 +88,7 @@ export class RouterRelay extends DurableObject<Env> {
     try {
       const a = this.attachment(ws),
         now = Date.now();
-      if (now >= a.expires) throw new Error("Expired");
+      if (a.expires && now >= a.expires) throw new Error("Expired");
       if (now - a.window >= 60000) {
         a.count = 0;
         a.window = now;
@@ -97,35 +102,49 @@ export class RouterRelay extends DurableObject<Env> {
           throw new Error("Unavailable");
         a.stage = "verifying";
         ws.serializeAttachment(a);
-        if (
-          !(await verifyRegistration(a.deviceId, a.nonce, frame)) ||
-          this.device()
-        )
+        if (!(await verifyRegistration(a.deviceId, a.nonce, frame)))
           throw new Error("Unavailable");
-        const reservation = await registry(this.env).fetch(
-          "https://registry.internal/reserve",
-          {
+        if (this.device()) {
+          this.send(ws, {
+            type: "registration.error",
+            code: "identity_in_use",
+          });
+          ws.close(1008, "Identity already connected");
+          return;
+        }
+        const reservation = await registry(this.env)
+          .fetch("https://registry.internal/reserve", {
             method: "POST",
             body: JSON.stringify({
               deviceId: a.deviceId,
               name: frame.name,
               publicKey: frame.publicKey,
             }),
-          },
-        );
+          })
+          .catch(() => new Response(null, { status: 503 }));
         if (!reservation.ok) {
           this.send(ws, {
             type: "registration.error",
-            code: "name_unavailable",
+            code:
+              reservation.status === 409
+                ? "name_unavailable"
+                : reservation.status === 400
+                  ? "invalid_identity"
+                  : "registry_unavailable",
           });
-          ws.close(1008, "Name unavailable");
+          ws.close(
+            reservation.status >= 500 ? 1013 : 1008,
+            "Registration unavailable",
+          );
           return;
         }
         if (this.device()) throw new Error("Unavailable");
         const record = (await reservation.json()) as DeviceRecord;
         a.name = record.name;
         a.role = "device";
-        a.expires = now + 24 * 3600000;
+        // A verified device connection has no artificial daily cutoff. Browser
+        // authorization still expires independently and is enforced on-device.
+        a.expires = 0;
         a.nonce = "";
         ws.serializeAttachment(a);
         this.send(ws, {
@@ -192,7 +211,7 @@ export class RouterRelay extends DurableObject<Env> {
           b.stage = "challenge";
         else if (reply.type === "auth.ok" && b.stage === "challenge") {
           b.stage = "authorized";
-          b.expires = now + 1800000;
+          b.expires = now + sessionSeconds(reply.expiresIn) * 1000;
         } else if (reply.type !== "rpc" || b.stage !== "authorized") {
           this.send(browser, {
             type: "error",
@@ -220,7 +239,7 @@ export class RouterRelay extends DurableObject<Env> {
     wasClean: boolean,
   ): Promise<void> {
     const a = this.attachment(ws);
-    if (a.role === "device")
+    if (a.role === "device" && !this.device(ws))
       for (const other of this.sockets()) {
         if (other !== ws && this.attachment(other).role === "browser") {
           this.send(other, { type: "offline" });
@@ -248,13 +267,14 @@ export class RouterRelay extends DurableObject<Env> {
     let next = Infinity;
     for (const ws of this.sockets()) {
       const a = this.attachment(ws);
-      if (a.expires <= now || (a.pending && a.pending <= now)) {
+      if ((a.expires && a.expires <= now) || (a.pending && a.pending <= now)) {
         this.send(ws, {
           type: "error",
           message: "Request rejected or device unavailable",
         });
         ws.close(1008, "Expired");
-      } else next = Math.min(next, a.expires, a.pending || Infinity);
+      } else
+        next = Math.min(next, a.expires || Infinity, a.pending || Infinity);
     }
     if (Number.isFinite(next)) await this.ctx.storage.setAlarm(next);
   }

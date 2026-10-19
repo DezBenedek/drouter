@@ -3,6 +3,12 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "drouter.dezso.hu/*",
+      "zone_id": "a93d81d92342870ea117b2cbe4e821ac"
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",

@@ -13,7 +13,7 @@ import {
   language,
   t,
 } from "./shared/i18n.js";
-import { Client, randomId } from "./shared/client.js";
+import { Client, randomId, remoteStatus } from "./shared/client.js";
 import { theme, toggleTheme } from "./shared/theme.js";
 const root = document.querySelector("#app");
 const esc = (s) =>
@@ -166,7 +166,7 @@ async function run(task, close = false) {
     message = "";
   }
 }
-function logout(text = "") {
+function logout(text = "", kind = "error") {
   dismissToast();
   controlCleanup?.();
   restrictedCleanup?.();
@@ -176,7 +176,7 @@ function logout(text = "") {
   client = null;
   data = {};
   closeDialog();
-  login(text);
+  login(text, kind);
 }
 async function connect(p) {
   client = await new Client().open("", p, false);
@@ -190,8 +190,8 @@ async function connect(p) {
   await refresh();
   render();
 }
-function login(error = "") {
-  if (error) toast(error, "error", "login-error");
+function login(error = "", kind = "error") {
+  if (error) toast(error, kind, "login-error");
   root.innerHTML = `<main class="auth-screen"><div class="auth-panel"><div class="auth-brand">${brand}${languageControl()}</div><h1>Connect to your DRouter</h1><p>Local device control</p><form id="login-form">${password("password", "Password", true)}<button class="primary auth-submit">Connect</button></form><div class="auth-foot"><span>Verified on this device</span>${button(theme() === "dark" ? "Light appearance" : "Dark appearance", "theme", 'class="quiet"')}</div></div></main>`;
   root.querySelector("form").onsubmit = async (e) => {
     e.preventDefault();
@@ -366,7 +366,7 @@ function render() {
         ) +
         row(
           "Cloud connection",
-          `<span class="secondary">${esc(n.cloud === "name_unavailable" ? "Name reserved — choose another name" : n.cloud)}</span>`,
+          `<span class="secondary">${esc(remoteStatus(n.cloud))}</span>`,
         ) +
         row(
           "Registered name",
@@ -391,7 +391,7 @@ function render() {
         row(
           "Active sessions",
           button("Revoke all", "revoke"),
-          "Sessions expire after 30 minutes",
+          "Sessions expire after 24 hours",
         ) +
         row(
           "Identity recovery",
@@ -908,7 +908,11 @@ document.addEventListener("change", (e) => {
       }),
     );
   if (e.target.matches("[data-toggle-cloud]"))
-    void run(() => settings({ cloud_enabled: e.target.checked }));
+    void run(async () => {
+      const result = await settings({ cloud_enabled: e.target.checked });
+      if (result?.reauthenticate)
+        logout("Remote access updated. Reconnect to continue.", "success");
+    });
   if (e.target.matches("[data-select=preset]") && e.target.value)
     applyPreset(data.presets.find((x) => x.id === e.target.value));
   if (e.target.matches("[data-available]"))

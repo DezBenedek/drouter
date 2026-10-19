@@ -1,5 +1,13 @@
 export const dictionaries = {
   en: {
+    "Name belongs to another device. Choose another name or restore its identity.":
+      "Name belongs to another device. Choose another name or restore its identity.",
+    "Registration service unavailable. Retrying automatically.":
+      "Registration service unavailable. Retrying automatically.",
+    "This device identity is already connected. Stop its other instance.":
+      "This device identity is already connected. Stop its other instance.",
+    "Device identity could not be verified. Check the identity recovery file.":
+      "Device identity could not be verified. Check the identity recovery file.",
     Notifications: "Notifications",
     "Dismiss notification": "Dismiss notification",
     "Event Mode enabled": "Event Mode enabled",
@@ -250,7 +258,7 @@ export const dictionaries = {
     "Verified only on this device": "Verified only on this device",
     "Active sessions": "Active sessions",
     "Revoke all": "Revoke all",
-    "Sessions expire after 30 minutes": "Sessions expire after 30 minutes",
+    "Sessions expire after 24 hours": "Sessions expire after 24 hours",
     "Identity recovery": "Identity recovery",
     "Export recovery file": "Export recovery file",
     "Keep the file private. It proves ownership of reserved names.":
@@ -436,8 +444,8 @@ export const dictionaries = {
       "Saved passwords are never returned to this interface. Drag rows to reorder on desktop, or use the arrow controls.",
     "Sensitive changes require a connection authenticated within the last five minutes. Identity recovery and factory reset are available from the local interface.":
       "Sensitive changes require a connection authenticated within the last five minutes. Identity recovery and factory reset are available from the local interface.",
-    "Sessions expire automatically after 30 minutes":
-      "Sessions expire automatically after 30 minutes",
+    "Sessions expire automatically after 24 hours":
+      "Sessions expire automatically after 24 hours",
     Status: "Status",
     "Stays the same across renames": "Stays the same across renames",
     "Stored and verified only on your DRouter":
@@ -556,6 +564,14 @@ export const dictionaries = {
     "DRouter · Local": "DRouter · Local",
   },
   hu: {
+    "Name belongs to another device. Choose another name or restore its identity.":
+      "Ez a név másik eszközhöz tartozik. Válasszon másik nevet, vagy állítsa vissza az eredeti eszközazonosságot.",
+    "Registration service unavailable. Retrying automatically.":
+      "A regisztrációs szolgáltatás nem érhető el. Az eszköz automatikusan újrapróbálkozik.",
+    "This device identity is already connected. Stop its other instance.":
+      "Ez az eszközazonosság már csatlakozik. Állítsa le a másik példányt.",
+    "Device identity could not be verified. Check the identity recovery file.":
+      "Az eszközazonosság nem ellenőrizhető. Ellenőrizze a helyreállítási fájlt.",
     Notifications: "Értesítések",
     "Dismiss notification": "Értesítés bezárása",
     "Event Mode enabled": "Rendezvény mód bekapcsolva",
@@ -806,7 +822,7 @@ export const dictionaries = {
       "Az ellenőrzést kizárólag ez az eszköz végzi",
     "Active sessions": "Aktív munkamenetek",
     "Revoke all": "Összes visszavonása",
-    "Sessions expire after 30 minutes": "A munkamenetek 30 perc után lejárnak",
+    "Sessions expire after 24 hours": "A munkamenetek 24 óra után lejárnak",
     "Identity recovery": "Eszközazonosító helyreállítása",
     "Export recovery file": "Helyreállítási fájl exportálása",
     "Keep the file private. It proves ownership of reserved names.":
@@ -993,8 +1009,8 @@ export const dictionaries = {
       "A mentett jelszavak soha nem kerülnek vissza erre a felületre. A sorrendet asztali gépen húzással, vagy a nyilakkal módosíthatja.",
     "Sensitive changes require a connection authenticated within the last five minutes. Identity recovery and factory reset are available from the local interface.":
       "Az érzékeny módosításokhoz az elmúlt öt percben hitelesített kapcsolat szükséges. Az eszközazonosító helyreállítása és a gyári visszaállítás a helyi felületen érhető el.",
-    "Sessions expire automatically after 30 minutes":
-      "A munkamenetek 30 perc után automatikusan lejárnak",
+    "Sessions expire automatically after 24 hours":
+      "A munkamenetek 24 óra után automatikusan lejárnak",
     Status: "Állapot",
     "Stays the same across renames": "Átnevezés esetén is változatlan",
     "Stored and verified only on your DRouter":

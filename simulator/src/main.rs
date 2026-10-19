@@ -263,8 +263,11 @@ async fn socket_loop(mut socket: WebSocket, s: Shared, _permit: tokio::sync::Own
     {
         return;
     }
-    while let Ok(Some(Ok(message))) =
-        tokio::time::timeout(Duration::from_secs(1800), socket.recv()).await
+    while let Ok(Some(Ok(message))) = tokio::time::timeout(
+        Duration::from_secs(drouter::auth::SESSION_SECONDS),
+        socket.recv(),
+    )
+    .await
     {
         if let Message::Text(text) = message {
             let Ok(v) = serde_json::from_str(&text) else {

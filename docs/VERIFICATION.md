@@ -5,17 +5,32 @@ Verified on macOS Apple Silicon on 2026-10-19. No Waveshare board or physical Bi
 | Check | Result |
 | --- | --- |
 | `cargo fmt --all -- --check` | Passed |
-| `cargo test --workspace` | 24 tests passed: authentication, routing/readback, Wi-Fi policy, presets, persistence, limits, replay/expiry, validation and rollback |
+| `cargo test --workspace` | 26 tests passed: authentication, routing/readback, Wi-Fi policy, presets, persistence, limits, replay/expiry, validation and rollback |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Passed |
 | `cargo build -p drouter-simulator` | Passed on macOS |
-| `npm test --prefix cloud` | 9 Worker/protocol/localization tests passed |
+| `npm test --prefix cloud` | 12 Worker/protocol/localization tests passed |
 | `npm run build --prefix cloud` | TypeScript check and production React/Vite build passed |
-| `npm run test:e2e --prefix cloud` | 38 integration checks passed against fresh real Wrangler and simulator processes, including Chromium |
+| `npm run test:e2e --prefix cloud` | 39 integration checks passed against fresh real Wrangler and simulator processes, including Chromium |
 | `npm audit --prefix cloud` | No known vulnerabilities reported in the locked dependency set |
 | `cargo +esp build --features esp --release --locked` inside `firmware/` | Xtensa ESP32-S3 release cross-build passed |
 | `./scripts/firmware-image.sh` | Merged 16 MB flash image generated; no USB device accessed |
 
 The shared authentication crate intentionally emits both `rlib` and browser `cdylib`. The ESP compiler reports that the unsupported `cdylib` output is dropped and successfully builds the `rlib`; this is the only expected cross-build warning.
+
+## v0.2.1 remote reliability and sessions
+
+Verified on 2026-10-19:
+
+- Native authentication/session tests passed for actual encrypted requests after the former 30-minute limit, a 24-hour hard expiry, unchanged five-minute elevation, replay rejection and revocation. All 26 workspace tests and all 12 Worker/protocol/localization tests passed; Rust formatting/Clippy and the dependency audit passed.
+- All 39 isolated simulator/relay/Chromium integration checks passed with the final UI. Added mobile remote-access disable/enable acceptance checks for acknowledged success feedback, required reauthentication, successful reconnection and the 24-hour session description. Real ownership conflicts, duplicate identities, spoofing, replay, persistent reservations and recovery remain covered.
+- Desktop/mobile local and remote layouts and axe accessibility passed. Removed opacity from toast entry motion so text retains full contrast immediately, including when the notification stack moves out of a closing dialog. Reviewed the updated mobile routing screenshots and the new local remote-access screenshot.
+- The existing local simulator was restarted with its original encrypted state. Encrypted configuration files were byte-for-byte unchanged; the actual virtual receiver routing was preserved and registration with the public relay succeeded. The simulator remains available on port 8080.
+- ESP32-S3 release cross-build and merged image generation passed. Application: 1,889,104 / 7,340,032 bytes (25.74%); merged image: 16,777,216 bytes. Firmware SHA-256: `2f72de82ab42d2487dfead3cc03cc8dde4b29084790723357859abf023d6d68d`; the release includes matching `SHA256SUMS`.
+- Deployed the Worker with preserved bindings/variables and the checked-in `drouter.dezso.hu/*` route through the existing Cloudflare for SaaS zone. Version: `8e00e38a-6970-4a06-b6a6-5d246df302da`. Public HTTPS returns 200 with the configured CSP and security headers.
+
+The isolated `DROUTER_LIVE_ORIGIN=https://drouter.dezso.hu node tests/live-relay-check.mjs` passed all four live checks: device registration, administrator authentication and actual virtual BirdDog switch/readback, restricted Simple Mode/Event Mode enforcement, and the deployed mobile React interface without overflow or runtime errors. Temporary processes and encrypted state were removed. Only minimal public registration `deploy-check-7fd99572ed` remains reserved by design.
+
+Browser credentials/session keys remain memory-only. Closing/reloading the interface or losing the device connection requires a fresh login. Physical hardware flashing and hardware acceptance were not performed.
 
 ## v0.2.0 release verification
 

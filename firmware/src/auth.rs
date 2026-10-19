@@ -10,6 +10,7 @@ use sha2::Sha256;
 use srp_state::Pending;
 use std::collections::BTreeMap;
 use zeroize::Zeroize;
+pub const SESSION_SECONDS: u64 = 24 * 60 * 60;
 mod srp_state {
     pub struct Pending {
         pub states: Vec<(super::Role, srp::server::SrpServerVerifier<sha2::Sha256>)>,
@@ -122,14 +123,14 @@ impl Auth {
             bail!("Authentication failed");
         };
         self.attempts.pop();
-        let reply = json!({"type":"auth.ok","proof":hex::encode(state.proof()),"expiresIn":1800});
+        let reply = json!({"type":"auth.ok","proof":hex::encode(state.proof()),"expiresIn":SESSION_SECONDS});
         self.sessions.insert(
             sid.into(),
             Session {
                 role,
                 requests: vec![],
                 key: state.key().to_vec(),
-                expires: now + 1800,
+                expires: now + SESSION_SECONDS,
                 elevated_until: now + 300,
                 rx: 0,
                 tx: 0,

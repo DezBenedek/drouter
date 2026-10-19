@@ -1,4 +1,11 @@
 export const MAX_MESSAGE = 32768;
+export const SESSION_SECONDS = 24 * 60 * 60;
+// Respect older firmware's shorter session too. Never extend its authorization.
+export function sessionSeconds(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? Math.min(value, SESSION_SECONDS)
+    : 1800;
+}
 export type Frame = { type: string; [key: string]: unknown };
 export function parseFrame(message: string | ArrayBuffer): Frame {
   if (
