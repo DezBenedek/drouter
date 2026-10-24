@@ -2,7 +2,6 @@ import {
   mountControl,
   mountSimple,
   toggleEvent,
-  confirmChange,
   toast,
   dismissToast,
 } from "../../../firmware/web/shared/control.js";
@@ -11,11 +10,6 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { Feedback } from "./feedback";
 import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowUp,
-  ChevronRight,
-  GripVertical,
   ListVideo,
   LogOut,
   Monitor,
@@ -46,7 +40,6 @@ import {
   relativeTime,
   snapshot,
   type DeviceClient,
-  type Preset,
   type Profile,
   type Receiver,
   type Snapshot,
@@ -62,9 +55,7 @@ type DialogSpec = {
 const pages = [
   { name: "Routing", icon: SlidersHorizontal },
   { name: "Sources", icon: ListVideo },
-  { name: "Simple Modes", icon: Monitor },
   { name: "Devices", icon: Monitor },
-  { name: "Presets", icon: ListVideo },
   { name: "Settings", icon: SettingsIcon },
 ];
 function useFeedback(message: string, kind: string) {
@@ -198,7 +189,6 @@ function Workspace({
     [page, setPage] = useState("Routing"),
     [more, setMore] = useState(false),
     [eventBusy, setEventBusy] = useState(false),
-    [section, setSection] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState(""),
     [error, setError] = useState(""),
@@ -239,7 +229,6 @@ function Workspace({
     client.onDisconnect = () => {};
     leave(message, kind);
   }
-  const drag = useRef<string | null>(null);
   async function refresh() {
     const next = await snapshot(client);
     setData(next);
@@ -251,8 +240,9 @@ function Workspace({
     const timer = setInterval(() => {
       if (
         !working.current &&
-        !["Routing", "Sources", "Simple Modes"].includes(page) &&
-        !(page === "Settings" && section === "Access Control") &&
+        page !== "Routing" &&
+        page !== "Sources" &&
+        page !== "Settings" &&
         !document.querySelector("form:focus-within") &&
         document.visibilityState === "visible"
       ) {
@@ -268,7 +258,7 @@ function Workspace({
       clearInterval(timer);
       client.onDisconnect = () => {};
     };
-  }, [page, section]);
+  }, [page]);
   useEffect(() => {
     const receive = (event: Event) => {
       const info = (event as CustomEvent).detail;
@@ -309,53 +299,9 @@ function Workspace({
     setDialog(spec);
   }
   const call = (op: string, params: unknown = {}) => client.call(op, params);
-  function savePreset() {
+  function renameReceiver(id: string, name: string) {
     open({
-      title: "Save current routing",
-      description: "Capture the sources currently reported by your receivers.",
-      body: (
-        <Field
-          name="name"
-          label="Preset name"
-          autoFocus
-          required
-          maxLength={64}
-        />
-      ),
-      action: "Save preset",
-      submit: async (f) => {
-        await call("presets.create", { name: f.name });
-        setMessage("Preset saved on your DRouter.");
-      },
-    });
-  }
-  function applyPreset(p: Preset) {
-    const perform = async () => {
-      const result = await call("presets.apply", { id: p.id });
-      const report = result.results
-        .map(
-          (x: any) =>
-            `${data.receivers.find((r) => r.config.id === x.receiver)?.config.label || x.receiver}: ${x.ok ? "Verified" : x.error}`,
-        )
-        .join("\n");
-      if (result.results.some((x: any) => !x.ok)) {
-        setError(report);
-        setMessage("");
-      } else setMessage(report);
-    };
-    if (p.routes.length > 1)
-      open({
-        title: `Apply ${p.name}?`,
-        description: `This changes routing on ${p.routes.length} outputs.`,
-        body: <PresetRoutes preset={p} data={data} />,
-        action: "Apply preset",
-        submit: perform,
-      });
-    else void act(perform);
-  }
-  function rename(kind: "receivers" | "presets", id: string, name: string) {
-    open({
-      title: kind === "receivers" ? "Rename output" : "Rename preset",
+      title: "Rename output",
       body: (
         <Field
           label="Name"
@@ -368,28 +314,20 @@ function Workspace({
       ),
       action: "Save name",
       submit: async (f) => {
-        await call(
-          kind === "receivers" ? "receivers.rename" : "presets.update",
-          { id, name: f.name },
-        );
+        await call("receivers.rename", { id, name: f.name });
       },
     });
   }
-  function remove(kind: "receivers" | "presets", id: string, name: string) {
+  function removeReceiver(id: string, name: string) {
     open({
       title: `Remove ${name}?`,
       description:
-        kind === "receivers"
-          ? "The receiver will stop appearing in this workspace. Saved presets retain their existing output references."
-          : "This removes the saved preset from your DRouter.",
+        "The receiver will stop appearing in this workspace.",
       body: null,
       action: "Remove",
       destructive: true,
       submit: async () => {
-        await call(
-          kind === "receivers" ? "receivers.remove" : "presets.delete",
-          { id },
-        );
+        await call("receivers.remove", { id });
       },
     });
   }
@@ -449,40 +387,26 @@ function Workspace({
       },
     });
   }
-  function needsWifiWarning(id: string) {
-    return (
-      data.network.wifi.active === id &&
-      !(data.network.ethernet.link && data.network.ethernet.ip)
-    );
-  }
-  function wifiChange(op: string, params: any, profile: Profile) {
-    const task = async () => {
+  function wifiChange(op: string, params: any) {
+    void act(async () => {
       await call(op, { ...params, confirm_disconnect: true });
-    };
-    if (
-      op === "wifi.remove" ||
-      needsWifiWarning(
-        op === "wifi.connect" ? data.network.wifi.active : profile.id,
-      )
-    )
-      open({
-        title:
-          op === "wifi.remove"
-            ? "Remove network?"
-            : "Change the active Wi-Fi connection?",
-        description:
-          op === "wifi.remove" && !needsWifiWarning(profile.id)
-            ? "This removes the saved network and its password."
-            : "Remote access may disconnect. Keep local Ethernet or the physical recovery process available before continuing.",
-        body: (
-          <p className="secondary">
-            Your saved routing and presets stay on the device.
-          </p>
-        ),
-        action: "Continue",
-        submit: task,
-      });
-    else void act(task);
+    });
+  }
+  function wifiRemove(profile: Profile) {
+    open({
+      title: `Remove ${profile.ssid}?`,
+      description:
+        "This removes the saved network and its password. If the connection is lost, use Ethernet or the physical recovery process.",
+      body: null,
+      action: "Remove network",
+      destructive: true,
+      submit: async () => {
+        await call("wifi.remove", {
+          id: profile.id,
+          confirm_disconnect: true,
+        });
+      },
+    });
   }
   function editWifi(profile?: Profile) {
     open({
@@ -512,10 +436,9 @@ function Workspace({
                 : "WPA2-Personal · 8–63 characters"
             }
           />
-          {profile && needsWifiWarning(profile.id) && (
+          {profile && (
             <p className="help-text">
-              Editing this connection may interrupt remote access. Make sure
-              local recovery is available.
+              Leave the password empty to keep the saved one.
             </p>
           )}
         </>
@@ -528,7 +451,6 @@ function Workspace({
           ...(f.password ? { password: f.password } : {}),
           enabled: profile?.enabled ?? true,
           priority: profile?.priority ?? data.wifi.length,
-          confirm_disconnect: !!profile && needsWifiWarning(profile.id),
         });
       },
     });
@@ -599,20 +521,14 @@ function Workspace({
     });
   }
   function remoteToggle(enabled: boolean) {
-    open({
-      title: enabled ? "Enable remote access?" : "Disable remote access?",
-      description: enabled
-        ? "Your DRouter will reserve its name and connect automatically. No cloud account is needed."
-        : "Local routing stays available. The registered name remains reserved to this device.",
-      body: null,
-      action: enabled ? "Enable remote access" : "Disable remote access",
-      submit: async () => {
-        await call("settings.update", {
-          expected_revision: data.info.revision,
-          cloud_enabled: enabled,
-        });
+    void act(async () => {
+      const result = await call("settings.update", {
+        expected_revision: data.info.revision,
+        cloud_enabled: enabled,
+      });
+      if (result?.reauthenticate)
         logout("Remote access updated. Reconnect to continue.");
-      },
+      else setMessage(enabled ? "Remote access enabled." : "Remote access disabled.");
     });
   }
   const filteredReceivers = data.receivers.filter((r) =>
@@ -620,16 +536,6 @@ function Workspace({
       .toLowerCase()
       .includes(outputSearch.toLowerCase()),
   );
-  const settingsSections = [
-    "General",
-    "Access Control",
-    "Ethernet",
-    "Wi-Fi",
-    "Remote Access",
-    "Security",
-    "System",
-  ];
-  const currentSection = section || "General";
   function deviceDetail(r: Receiver) {
     open({
       title: r.config.label,
@@ -654,13 +560,15 @@ function Workspace({
           </SettingRow>
           <div className="form-actions">
             <Button
-              onClick={() => rename("receivers", r.config.id, r.config.label)}
+              onClick={() => renameReceiver(r.config.id, r.config.label)}
             >
               Rename
             </Button>
             <Button
               variant="danger"
-              onClick={() => remove("receivers", r.config.id, r.config.label)}
+              onClick={() =>
+                removeReceiver(r.config.id, r.config.label)
+              }
             >
               Remove receiver
             </Button>
@@ -732,7 +640,6 @@ function Workspace({
             onClick={() => {
               setPage(p.name);
               setMore(false);
-              setSection(null);
               setError("");
               setMessage("");
             }}
@@ -745,9 +652,7 @@ function Workspace({
           className="mobile-more"
           aria-controls="more-menu"
           aria-expanded={more}
-          aria-current={
-            ["Devices", "Simple Modes"].includes(page) ? "page" : undefined
-          }
+          aria-current={page === "Devices" ? "page" : undefined}
           onClick={() => setMore(!more)}
         >
           <MoreHorizontal />
@@ -768,32 +673,6 @@ function Workspace({
             aria-label="More"
             id="more-menu"
           >
-            {pages
-              .filter((p) => ["Devices", "Simple Modes"].includes(p.name))
-              .map((p) => (
-                <Button
-                  key={p.name}
-                  onClick={() => {
-                    setPage(p.name);
-                    setMore(false);
-                    setError("");
-                    setMessage("");
-                  }}
-                >
-                  <p.icon />
-                  <span>{p.name}</span>
-                </Button>
-              ))}
-            <Button
-              onClick={() => {
-                setPage("Settings");
-                setSection("Wi-Fi");
-                setMore(false);
-              }}
-            >
-              <SettingsIcon />
-              Wi-Fi
-            </Button>
             <div className="more-preferences">
               <span data-language-host />
               <Button variant="quiet" onClick={changeTheme}>
@@ -809,44 +688,16 @@ function Workspace({
             <h1>{page}</h1>
           </div>
           <div className="page-actions">
-            {page === "Routing" && data.presets.length > 0 && (
-              <select
-                aria-label="Quick apply preset"
-                value=""
-                onChange={(e) => {
-                  const p = data.presets.find((p) => p.id === e.target.value);
-                  if (p) applyPreset(p);
-                }}
-                disabled={busy}
-              >
-                <option value="">Preset…</option>
-                {data.presets.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            )}
             {page === "Devices" && (
               <Button variant="primary" disabled={busy} onClick={addReceiver}>
                 <Plus />
                 Add receiver
               </Button>
             )}
-            {page === "Presets" && (
-              <Button
-                variant="primary"
-                disabled={busy || !data.receivers.length}
-                onClick={savePreset}
-              >
-                <Plus />
-                Save current
-              </Button>
-            )}
           </div>
         </header>
         {page === "Routing" && <SharedControl client={client} page="Routing" />}
-        {["Sources", "Simple Modes"].includes(page) && (
+        {page === "Sources" && (
           <SharedControl key={page} client={client} page={page} />
         )}
 
@@ -907,7 +758,7 @@ function Workspace({
                   <div className="row-actions">
                     <Button
                       onClick={() =>
-                        rename("receivers", r.config.id, r.config.label)
+                        renameReceiver(r.config.id, r.config.label)
                       }
                     >
                       Rename
@@ -918,7 +769,7 @@ function Workspace({
                     <Button
                       variant="quiet danger"
                       onClick={() =>
-                        remove("receivers", r.config.id, r.config.label)
+                        removeReceiver(r.config.id, r.config.label)
                       }
                     >
                       Remove
@@ -937,481 +788,140 @@ function Workspace({
             )}
           </div>
         )}
-        {page === "Presets" && (
-          <div className="page-body">
-            <div className="data-list">
-              {data.presets.map((p) => (
-                <div className="list-row" key={p.id}>
-                  <div className="list-main">
-                    <Button
-                      className="preset-name"
-                      onClick={() =>
-                        open({
-                          title: p.name,
-                          description: `${p.routes.length} saved output connections`,
-                          body: <PresetRoutes preset={p} data={data} />,
-                          action: "Done",
-                          submit: async () => {},
-                        })
-                      }
-                    >
-                      {p.name}
-                    </Button>
-                    <span className="preset-detail">
-                      {p.routes.length} outputs
-                    </span>
-                  </div>
-                  <Button disabled={busy} onClick={() => applyPreset(p)}>
-                    Apply
-                  </Button>
-                  <div className="row-actions">
-                    <Button onClick={() => rename("presets", p.id, p.name)}>
-                      Rename
-                    </Button>
-                    <Button
-                      variant="quiet danger"
-                      onClick={() => remove("presets", p.id, p.name)}
-                    >
-                      Delete
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            {!data.presets.length && (
-              <Empty
-                title="Save a routing arrangement"
-                description="Presets capture verified output sources and are stored on your DRouter."
-              >
-                <Button onClick={savePreset} disabled={!data.receivers.length}>
-                  Save current routing
-                </Button>
-              </Empty>
-            )}
-          </div>
-        )}
         {page === "Settings" && (
-          <div className="page-body">
-            <div
-              className="settings-layout"
-              data-section={section || undefined}
-            >
-              <nav className="settings-nav" aria-label="Settings sections">
-                {settingsSections.map((s) => (
-                  <Button
-                    key={s}
-                    aria-current={currentSection === s ? "page" : undefined}
-                    onClick={() => setSection(s)}
-                  >
-                    {s}
-                    <ChevronRight className="mobile-only" />
-                  </Button>
-                ))}
-              </nav>
-              <section className="settings-section">
-                <Button
-                  className="settings-back"
-                  onClick={() => setSection(null)}
-                >
-                  <ArrowLeft />
-                  Settings
+          <div className="page-body settings-single">
+            <section className="settings-card" aria-label="Device">
+              <h2>Device</h2>
+              <SettingRow title="Device name" detail="Also used for remote login">
+                <span className="inline-actions">
+                  <span>{data.info.name}</span>
+                  <Button onClick={general}>Change</Button>
+                </span>
+              </SettingRow>
+              <SettingRow title="Appearance">
+                <select aria-label="Appearance" value={appearance} onChange={() => changeTheme()}>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </SettingRow>
+              <SettingRow title="Device identity" detail="Stays the same across renames">
+                <span className="mono secondary">{data.info.device_id?.slice(0, 16)}…</span>
+              </SettingRow>
+            </section>
+            <section className="settings-card" aria-label="Network">
+              <h2>Network</h2>
+              <SettingRow title="Connection">
+                <Status online={data.network.ethernet.link}>
+                  {data.network.ethernet.ip || "Disconnected"}
+                </Status>
+              </SettingRow>
+              <form
+                className="settings-group"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const f = Object.fromEntries(new FormData(e.currentTarget));
+                  void act(async () => {
+                    await call("settings.update", {
+                      expected_revision: data.info.revision,
+                      ethernet: Object.fromEntries(
+                        ["address", "mask", "gateway", "dns"].map((k) => [k, f[k] || null]),
+                      ),
+                    });
+                    setMessage("Ethernet settings saved.");
+                  }, false);
+                }}
+              >
+                <div className="form-grid form-spaced">
+                  <Field label="IPv4 address" name="address" defaultValue={data.info.ethernet_config.address || ""} placeholder="Automatic (DHCP)" inputMode="decimal" hint="Leave empty to use DHCP." />
+                  <Field label="Subnet mask" name="mask" defaultValue={data.info.ethernet_config.mask || ""} placeholder="255.255.255.0" inputMode="decimal" />
+                  <Field label="Gateway" name="gateway" defaultValue={data.info.ethernet_config.gateway || ""} inputMode="decimal" />
+                  <Field label="DNS server" name="dns" defaultValue={data.info.ethernet_config.dns || ""} inputMode="decimal" />
+                </div>
+                <div className="form-actions">
+                  <button className="primary" disabled={busy}>Save Ethernet</button>
+                </div>
+              </form>
+              <h3>Wi-Fi</h3>
+              <div className="inline-actions">
+                <Button onClick={() => editWifi()} disabled={busy}>
+                  <Plus />
+                  Add network
                 </Button>
-                <h2>{currentSection}</h2>
-
-                {currentSection === "Access Control" && (
-                  <SharedControl client={client} page="Access Control" />
-                )}
-                {currentSection === "General" && (
-                  <div className="settings-group">
-                    <SettingRow
-                      title="Device name"
-                      detail="Also used for remote login"
-                    >
-                      <span className="inline-actions">
-                        <span>{data.info.name}</span>
-                        <Button onClick={general}>Change</Button>
+              </div>
+              <div className="data-list list-spaced">
+                {data.wifi.map((w, index) => (
+                  <div className={`wifi-row ${w.enabled ? "" : "disabled"}`} key={w.id}>
+                    <span className="priority">{index + 1}</span>
+                    <div className="wifi-copy">
+                      <strong data-user-content>{w.ssid}</strong>
+                      <span className="secondary">
+                        {data.network.wifi.active === w.id && data.network.wifi.connected
+                          ? "Connected"
+                          : w.enabled ? "Saved" : "Disabled"}
                       </span>
-                    </SettingRow>
-                    <SettingRow title="Appearance">
-                      <select
-                        aria-label="Appearance"
-                        value={appearance}
-                        onChange={() => changeTheme()}
-                      >
-                        <option value="light">Light</option>
-                        <option value="dark">Dark</option>
-                      </select>
-                    </SettingRow>
-                    <SettingRow
-                      title="Device identity"
-                      detail="Stays the same across renames"
-                    >
-                      <span className="mono secondary">
-                        {data.info.device_id?.slice(0, 16)}…
-                      </span>
-                    </SettingRow>
+                    </div>
+                    <div className="wifi-actions">
+                      <Button variant="quiet icon-button" aria-label={`Move ${w.ssid} up`} disabled={busy || index === 0} onClick={() => moveWifi(w.id, -1)}>↑</Button>
+                      <Button variant="quiet icon-button" aria-label={`Move ${w.ssid} down`} disabled={busy || index === data.wifi.length - 1} onClick={() => moveWifi(w.id, 1)}>↓</Button>
+                      <Button variant="quiet" className="edit-network" onClick={() => editWifi(w)}>Edit</Button>
+                      <input type="checkbox" role="switch" aria-label={`Enable ${w.ssid}`} checked={w.enabled} disabled={busy} onChange={(e) => wifiChange("wifi.set_enabled", { id: w.id, enabled: e.target.checked })} />
+                      <Button variant="quiet" disabled={busy || !w.enabled} onClick={() => wifiChange("wifi.connect", { id: w.id })}>Reconnect</Button>
+                      <Button variant="quiet danger" disabled={busy} onClick={() => wifiRemove(w)}>Remove</Button>
+                    </div>
                   </div>
-                )}
-                {currentSection === "Ethernet" && (
-                  <>
-                    <SettingRow title="Connection">
-                      <Status online={data.network.ethernet.link}>
-                        {data.network.ethernet.ip || "Disconnected"}
-                      </Status>
-                    </SettingRow>
-                    <form
-                      className="settings-group"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const f = Object.fromEntries(
-                          new FormData(e.currentTarget),
-                        );
-                        void act(async () => {
-                          if (
-                            !(await confirmChange(
-                              "Change network settings?",
-                              "This may interrupt your connection. Keep local Ethernet or physical recovery access available.",
-                            ))
-                          )
-                            return;
-                          await call("settings.update", {
-                            expected_revision: data.info.revision,
-                            ethernet: Object.fromEntries(
-                              ["address", "mask", "gateway", "dns"].map((k) => [
-                                k,
-                                f[k] || null,
-                              ]),
-                            ),
-                          });
-                          setMessage("Ethernet settings saved.");
-                        }, false);
-                      }}
-                    >
-                      <div className="form-grid form-spaced">
-                        <Field
-                          label="IPv4 address"
-                          name="address"
-                          defaultValue={data.info.ethernet_config.address || ""}
-                          placeholder="Automatic (DHCP)"
-                          inputMode="decimal"
-                          hint="Leave empty to use DHCP."
-                        />
-                        <Field
-                          label="Subnet mask"
-                          name="mask"
-                          defaultValue={data.info.ethernet_config.mask || ""}
-                          placeholder="255.255.255.0"
-                          inputMode="decimal"
-                        />
-                        <Field
-                          label="Gateway"
-                          name="gateway"
-                          defaultValue={data.info.ethernet_config.gateway || ""}
-                          inputMode="decimal"
-                        />
-                        <Field
-                          label="DNS server"
-                          name="dns"
-                          defaultValue={data.info.ethernet_config.dns || ""}
-                          inputMode="decimal"
-                        />
-                      </div>
-                      <div className="form-actions">
-                        <button className="primary" disabled={busy}>
-                          Save Ethernet
-                        </button>
-                      </div>
-                    </form>
-                  </>
-                )}
-                {currentSection === "Wi-Fi" && (
-                  <>
-                    <div className="inline-actions">
-                      <Button onClick={() => editWifi()} disabled={busy}>
-                        <Plus />
-                        Add network
-                      </Button>
-                    </div>
-                    <div className="data-list list-spaced">
-                      {data.wifi.map((w, index) => (
-                        <div
-                          className={`wifi-row ${w.enabled ? "" : "disabled"}`}
-                          key={w.id}
-                          draggable={matchMedia("(pointer:fine)").matches}
-                          onDragStart={(e) => {
-                            drag.current = w.id;
-                            e.dataTransfer.setData("text/plain", w.id);
-                          }}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            const from = drag.current;
-                            if (!from || from === w.id) return;
-                            const ids = data.wifi
-                              .map((p) => p.id)
-                              .filter((id) => id !== from);
-                            ids.splice(index, 0, from);
-                            void reorder(ids);
-                            drag.current = null;
-                          }}
-                        >
-                          <GripVertical className="wifi-drag" />
-                          <span className="priority">{index + 1}</span>
-                          <div className="wifi-copy">
-                            <strong data-user-content>{w.ssid}</strong>
-                            <span className="secondary">
-                              {data.network.wifi.active === w.id &&
-                              data.network.wifi.connected
-                                ? "Connected"
-                                : w.enabled
-                                  ? "Saved"
-                                  : "Disabled"}
-                            </span>
-                          </div>
-                          <div className="wifi-actions">
-                            <Button
-                              variant="quiet icon-button"
-                              aria-label={`Move ${w.ssid} up`}
-                              disabled={busy || index === 0}
-                              onClick={() => moveWifi(w.id, -1)}
-                            >
-                              <ArrowUp />
-                            </Button>
-                            <Button
-                              variant="quiet icon-button"
-                              aria-label={`Move ${w.ssid} down`}
-                              disabled={busy || index === data.wifi.length - 1}
-                              onClick={() => moveWifi(w.id, 1)}
-                            >
-                              <ArrowDown />
-                            </Button>
-                            <Button
-                              variant="quiet"
-                              className="edit-network"
-                              onClick={() => editWifi(w)}
-                            >
-                              Edit
-                            </Button>
-                            <input
-                              type="checkbox"
-                              role="switch"
-                              aria-label={`Enable ${w.ssid}`}
-                              checked={w.enabled}
-                              disabled={busy}
-                              onChange={(e) =>
-                                wifiChange(
-                                  "wifi.set_enabled",
-                                  { id: w.id, enabled: e.target.checked },
-                                  w,
-                                )
-                              }
-                            />
-                            <Button
-                              variant="quiet"
-                              disabled={busy || !w.enabled}
-                              onClick={() =>
-                                wifiChange("wifi.connect", { id: w.id }, w)
-                              }
-                            >
-                              Reconnect
-                            </Button>
-                            <Button
-                              variant="quiet danger"
-                              disabled={busy}
-                              onClick={() =>
-                                wifiChange("wifi.remove", { id: w.id }, w)
-                              }
-                            >
-                              Remove
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="help-text">
-                      Saved passwords are never returned to this interface. Drag
-                      rows to reorder on desktop, or use the arrow controls.
-                    </p>
-                    <details className="disclosure">
-                      <summary>Priority behavior</summary>
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const f = new FormData(e.currentTarget);
-                          void act(async () => {
-                            await call("settings.update", {
-                              expected_revision: data.info.revision,
-                              wifi_policy: {
-                                preferred_check_secs: Number(
-                                  f.get("preferred"),
-                                ),
-                                retry_secs: Number(f.get("retry")),
-                                prefer_higher: f.has("prefer"),
-                              },
-                            });
-                          }, false);
-                        }}
-                      >
-                        <Field
-                          label="Preferred network check interval (seconds)"
-                          type="number"
-                          name="preferred"
-                          defaultValue={
-                            data.info.wifi_policy.preferred_check_secs
-                          }
-                          min={60}
-                          max={3600}
-                        />
-                        <Field
-                          label="Reconnect cooldown (seconds)"
-                          type="number"
-                          name="retry"
-                          defaultValue={data.info.wifi_policy.retry_secs}
-                          min={5}
-                          max={120}
-                        />
-                        <label className="field-row">
-                          <input
-                            name="prefer"
-                            type="checkbox"
-                            defaultChecked={data.info.wifi_policy.prefer_higher}
-                          />
-                          Prefer higher-priority networks when stable
-                        </label>
-                        <div className="form-actions">
-                          <button disabled={busy}>Save behavior</button>
-                        </div>
-                      </form>
-                    </details>
-                  </>
-                )}
-                {currentSection === "Remote Access" && (
-                  <>
-                    <SettingRow
-                      title="Remote access"
-                      detail="Your device initiates the secure connection"
-                    >
-                      <input
-                        type="checkbox"
-                        role="switch"
-                        aria-label="Enable remote access"
-                        checked={data.info.cloud_enabled}
-                        onChange={(e) => remoteToggle(e.target.checked)}
-                        disabled={busy}
-                      />
-                    </SettingRow>
-                    <SettingRow title="Cloud connection">
-                      <span className="secondary">
-                        {remoteStatus(
-                          data.info.cloud_enabled
-                            ? data.network.cloud
-                            : "disabled",
-                        )}
-                      </span>
-                    </SettingRow>
-                    <SettingRow title="Registered name">
-                      <span>
-                        {data.network.registered_name || "Not registered yet"}
-                      </span>
-                    </SettingRow>
-                    <SettingRow title="Remote address">
-                      <a
-                        href={`${data.info.server}/?device=${encodeURIComponent(data.info.name)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {data.info.server.replace(/^https?:\/\//, "")}
-                      </a>
-                    </SettingRow>
-                    <SettingRow title="Last connected">
-                      <span className="secondary">
-                        {relativeTime(data.network.last_cloud_connection)}
-                      </span>
-                    </SettingRow>
-                    <p className="help-text">
-                      Cloudflare reserves the name and relays live commands.
-                      Passwords, networks, receivers, and presets stay on your
-                      DRouter.
-                    </p>
-                  </>
-                )}
-                {currentSection === "Security" && (
-                  <>
-                    <SettingRow
-                      title="Administrator password"
-                      detail="Stored and verified only on your DRouter"
-                    >
-                      <Button onClick={password}>Change</Button>
-                    </SettingRow>
-                    <SettingRow
-                      title="Active sessions"
-                      detail="Sessions expire automatically after 24 hours"
-                    >
-                      <Button
-                        onClick={() =>
-                          open({
-                            title: "Revoke all sessions?",
-                            description:
-                              "Every local and remote connection will need to authenticate again.",
-                            body: null,
-                            action: "Revoke sessions",
-                            submit: async () => {
-                              await call("sessions.revoke");
-                              logout(
-                                "Sessions revoked. Connect again to continue.",
-                              );
-                            },
-                          })
-                        }
-                      >
-                        Revoke all
-                      </Button>
-                    </SettingRow>
-                    <p className="help-text">
-                      Sensitive changes require a connection authenticated
-                      within the last five minutes. Identity recovery and
-                      factory reset are available from the local interface.
-                    </p>
-                  </>
-                )}
-                {currentSection === "System" && (
-                  <>
-                    <SettingRow title="Firmware">
-                      <span className="mono">{data.info.version}</span>
-                    </SettingRow>
-                    <SettingRow title="Uptime">
-                      <span className="mono">
-                        {Math.floor(data.health.uptime / 3600)}h{" "}
-                        {Math.floor(data.health.uptime / 60) % 60}m
-                      </span>
-                    </SettingRow>
-                    <SettingRow title="Available memory">
-                      <span className="mono">
-                        {data.health.free_memory
-                          ? `${Math.round(data.health.free_memory / 1024)} KiB`
-                          : "Host managed"}
-                      </span>
-                    </SettingRow>
-                    <SettingRow title="Configuration storage">
-                      <span className="mono">
-                        {Math.round(
-                          ((data.health.config_bytes || 0) / 1024) * 10,
-                        ) / 10}{" "}
-                        / 24 KiB
-                      </span>
-                    </SettingRow>
-                    <SettingRow title="Recorded errors">
-                      <span className="mono">{data.health.errors}</span>
-                    </SettingRow>
-                    <p className="help-text">
-                      The standalone device keeps routing when Cloud access is
-                      unavailable. Use local System settings for recovery or
-                      factory reset.
-                    </p>
-                  </>
-                )}
-              </section>
-            </div>
+                ))}
+              </div>
+              <p className="help-text">Passwords stay on this device. Use the arrows to change priority.</p>
+            </section>
+            <section className="settings-card" aria-label="Remote access">
+              <h2>Remote access</h2>
+              <SettingRow title="Remote access" detail="Your device initiates the secure connection">
+                <input type="checkbox" role="switch" aria-label="Enable remote access" checked={data.info.cloud_enabled} onChange={(e) => remoteToggle(e.target.checked)} disabled={busy} />
+              </SettingRow>
+              <SettingRow title="Cloud connection">
+                <span className="secondary">{remoteStatus(data.info.cloud_enabled ? data.network.cloud : "disabled")}</span>
+              </SettingRow>
+              <SettingRow title="Registered name">
+                <span>{data.network.registered_name || "Not registered yet"}</span>
+              </SettingRow>
+              <SettingRow title="Remote address">
+                <a href={`${data.info.server}/?device=${encodeURIComponent(data.info.name)}`} target="_blank" rel="noreferrer">
+                  {data.info.server.replace(/^https?:\/\//, "")}
+                </a>
+              </SettingRow>
+              <SettingRow title="Last connected">
+                <span className="secondary">{relativeTime(data.network.last_cloud_connection)}</span>
+              </SettingRow>
+            </section>
+            <section className="settings-card" aria-label="Access">
+              <h2>Access</h2>
+              <SharedControl client={client} page="Access Control" />
+            </section>
+            <section className="settings-card" aria-label="Security">
+              <h2>Security</h2>
+              <SettingRow title="Administrator password" detail="Stored and verified only on your DRouter">
+                <Button onClick={password}>Change</Button>
+              </SettingRow>
+              <SettingRow title="Active sessions" detail="Sessions expire automatically after 24 hours">
+                <Button onClick={() => open({
+                  title: "Revoke all sessions?",
+                  description: "Every local and remote connection will need to authenticate again.",
+                  body: null,
+                  action: "Revoke sessions",
+                  submit: async () => {
+                    await call("sessions.revoke");
+                    logout("Sessions revoked. Connect again to continue.");
+                  },
+                })}>Revoke all</Button>
+              </SettingRow>
+            </section>
+            <section className="settings-card" aria-label="System">
+              <h2>System</h2>
+              <SettingRow title="Firmware"><span className="mono">{data.info.version}</span></SettingRow>
+              <SettingRow title="Uptime"><span className="mono">{Math.floor(data.health.uptime / 3600)}h {Math.floor(data.health.uptime / 60) % 60}m</span></SettingRow>
+              <SettingRow title="Available memory"><span className="mono">{data.health.free_memory ? `${Math.round(data.health.free_memory / 1024)} KiB` : "Host managed"}</span></SettingRow>
+              <SettingRow title="Recorded errors"><span className="mono">{data.health.errors}</span></SettingRow>
+            </section>
           </div>
         )}
       </main>
@@ -1455,25 +965,6 @@ function Workspace({
           </form>
         </Modal>
       )}
-    </div>
-  );
-}
-function PresetRoutes({ preset, data }: { preset: Preset; data: Snapshot }) {
-  return (
-    <div>
-      {preset.routes.map(([id, source]) => (
-        <div className="preset-route" key={id}>
-          <span>
-            {data.receivers.find((r) => r.config.id === id)?.config.label ||
-              "Removed output"}
-            <small>
-              {data.receivers.find((r) => r.config.id === id)?.state.source ||
-                "Unavailable"}
-            </small>
-          </span>
-          <span>{source}</span>
-        </div>
-      ))}
     </div>
   );
 }

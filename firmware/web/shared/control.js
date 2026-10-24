@@ -243,23 +243,30 @@ export function eventControl(enabled) {
 const routeCache = new WeakMap();
 const currentSource = (r) => r.state.source || r.state.last_source;
 async function load(client, page) {
-  const ops =
-    page === "Access Control"
-      ? ["device.info"]
-      : [
-          "device.info",
-          "sources.saved.list",
-          "sources.list",
-          "receivers.list",
-          ...(page === "Simple Modes" ? ["simple.list"] : []),
-        ];
-  const [
-    info,
-    saved = [],
-    discovered = { sources: [] },
-    receivers = [],
-    profiles = [],
-  ] = await Promise.all(ops.map((op) => client.call(op)));
+  const access = page === "Access Control";
+  const ops = access
+    ? [
+        "device.info",
+        "simple.list",
+        "sources.saved.list",
+        "sources.list",
+        "receivers.list",
+      ]
+    : [
+        "device.info",
+        "sources.saved.list",
+        "sources.list",
+        "receivers.list",
+        ...(page === "Simple Modes" ? ["simple.list"] : []),
+      ];
+  const results = await Promise.all(ops.map((op) => client.call(op)));
+  const info = results[0];
+  const saved = access ? (results[2] ?? []) : (results[1] ?? []);
+  const discovered = access
+    ? (results[3] ?? { sources: [] })
+    : (results[2] ?? { sources: [] });
+  const receivers = access ? (results[4] ?? []) : (results[3] ?? []);
+  const profiles = access ? (results[1] ?? []) : (results[4] ?? []);
   publishInfo(info);
   let cache = routeCache.get(client);
   if (!cache) {
@@ -918,7 +925,7 @@ function controlMarkup(data, page, state) {
   if (page === "Simple Modes")
     return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
   if (page === "Access Control")
-    return `<div class="settings-row"><div class="settings-copy">${t("Event Mode")}<span>${t(data.event.enabled ? "Enabled" : "Disabled")}</span></div>${b(data.event.enabled ? "Disable Event Mode" : "Enable Event Mode", "event")}</div><p class="help-text">${t("Enabling Event Mode will temporarily disable all Simple Modes. Only the administrator will be able to control DRouter.")}</p><div class="settings-row"><span>${t("Language")}</span>${languageControl()}</div><div class="settings-row"><span>${t("Contact")}</span><a href="mailto:benedek@dezso.hu">benedek@dezso.hu</a></div>`;
+    return `<div class="settings-row"><div class="settings-copy">${t("Event Mode")}<span>${t(data.event.enabled ? "Enabled" : "Disabled")}</span></div>${b(data.event.enabled ? "Disable Event Mode" : "Enable Event Mode", "event")}</div><p class="help-text">${t("Enabling Event Mode will temporarily disable all Simple Modes. Only the administrator will be able to control DRouter.")}</p><h3 class="list-section-title">${t("Simple Modes")}</h3><div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div><div class="settings-row"><span>${t("Language")}</span>${languageControl()}</div><div class="settings-row"><span>${t("Contact")}</span><a href="mailto:benedek@dezso.hu">benedek@dezso.hu</a></div>`;
   if (page !== "Routing") return "";
   const receivers = data.receivers.filter((r) =>
     `${r.config.label} ${r.config.ip}`

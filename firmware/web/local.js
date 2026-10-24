@@ -3,16 +3,10 @@ import {
   mountSimple,
   toggleEvent,
   eventControl,
-  confirmChange,
   toast,
   dismissToast,
 } from "./shared/control.js";
-import {
-  installLocalization,
-  languageControl,
-  language,
-  t,
-} from "./shared/i18n.js";
+import { installLocalization, languageControl } from "./shared/i18n.js";
 import { Client, randomId, remoteStatus } from "./shared/client.js";
 import { theme, toggleTheme } from "./shared/theme.js";
 const root = document.querySelector("#app");
@@ -29,11 +23,9 @@ const icon = (path) =>
 const icons = {
   Routing: icon('<path d="M4 5h16M4 12h16M4 19h16M8 2v20M16 2v20"/>'),
   Sources: icon('<path d="M4 5h16M4 12h16M4 19h16"/>'),
-  "Simple Modes": icon('<rect x="4" y="4" width="16" height="16" rx="3"/>'),
   Devices: icon(
     '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
   ),
-  Presets: icon('<path d="M7 4h14M7 12h14M7 20h14M2 4h1M2 12h1M2 20h1"/>'),
   Settings: icon(
     '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="16" cy="17" r="3"/>',
   ),
@@ -56,12 +48,10 @@ const empty = (title, detail) =>
 let client,
   data = {},
   page = "Routing",
-  section = "",
   busy = false,
   message = "",
   failure = "",
-  outputSearch = "",
-  dragId;
+  outputSearch = "";
 let dialog, dialogSubmit, controlCleanup, restrictedCleanup;
 function closeDialog() {
   if (dialog) {
@@ -121,7 +111,6 @@ async function refresh() {
       "network.status",
       "receivers.list",
       "sources.list",
-      "presets.list",
       "wifi.list",
     ].map((op) => client.call(op)),
   );
@@ -132,8 +121,7 @@ async function refresh() {
     receivers: values[3],
     sources: values[4].sources,
     sourceErrors: values[4].errors,
-    presets: values[5],
-    wifi: values[6],
+    wifi: values[5],
   };
 }
 async function run(task, close = false) {
@@ -293,7 +281,6 @@ function render() {
     network: n,
     receivers: r,
     sources: s,
-    presets: p,
     wifi: w,
   } = data;
   const outputs = r.filter((x) =>
@@ -302,129 +289,50 @@ function render() {
   let content = "",
     actions = "";
   if (page === "Routing") {
-    actions = p.length
-      ? `<select aria-label="Quick apply preset" data-select="preset"><option value="">Preset…</option>${p.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("")}</select>`
-      : "";
     content = `<div class="page-body" id="control-host"></div>`;
   }
-  if (["Sources", "Simple Modes"].includes(page))
+  if (page === "Sources")
     content = `<div class="page-body" id="control-host"></div>`;
   if (page === "Devices") {
     actions = button("Add receiver", "add-receiver", 'class="primary"');
     content = `<div class="page-body"><div class="routing-tools">${search("Find an output", outputSearch, "output")}${button("Discover", "discover")}</div><div class="data-list">${outputs.map((x) => `<div class="list-row"><div class="list-main"><strong>${esc(x.config.label)}</strong><span class="secondary">${esc(x.model || "BirdDog decoder")}<span class="mobile-only mobile-address">${esc(x.config.ip)}</span></span></div><span class="address mono">${esc(x.config.ip)}</span>${status(x.state.online, x.state.online ? "Online" : "Offline")}<span class="route-name secondary">${esc(x.state.source || "Unavailable")}</span><div class="row-actions">${button("Rename", "rename-receiver", `data-id="${esc(x.config.id)}"`)}${button("Details", "receiver-detail", `class="quiet" data-id="${esc(x.config.id)}"`)}${button("Remove", "remove-receiver", `class="quiet danger" data-id="${esc(x.config.id)}"`)}</div></div>`).join("")}</div>${!r.length ? empty("Add your first receiver", "Discover compatible devices or register a BirdDog by IP.") : ""}</div>`;
   }
-  if (page === "Presets") {
-    actions = button("Save current", "save-preset", 'class="primary"');
-    content = `<div class="page-body"><div class="data-list">${p.map((x) => `<div class="list-row"><div class="list-main">${button(esc(x.name), "inspect-preset", `class="preset-name" data-id="${x.id}"`)}<span class="preset-detail">${x.routes.length} outputs</span></div>${button("Apply", "apply-preset", `data-id="${x.id}"`)}<div class="row-actions">${button("Rename", "rename-preset", `data-id="${x.id}"`)}${button("Delete", "delete-preset", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div>${!p.length ? empty("Save a routing arrangement", "Presets capture verified output sources and stay on this DRouter.") : ""}</div>`;
-  }
   if (page === "Settings") {
-    const sections = [
-        "General",
-        "Access Control",
-        "Ethernet",
-        "Wi-Fi",
-        "Remote Access",
-        "Security",
-        "System",
-      ],
-      current = section || "General";
-    let body = "";
-    if (current === "Access Control") body = `<div id="control-host"></div>`;
-    if (current === "General")
-      body =
-        row(
-          "Device name",
-          `<span class="inline-actions">${esc(i.name)}${button("Change", "change-name")}</span>`,
-          "Also used for remote login",
-        ) +
-        row(
-          "Appearance",
-          button(theme() === "dark" ? "Dark" : "Light", "theme"),
-        ) +
-        row(
-          "Device identity",
-          `<span class="mono secondary">${esc(i.device_id.slice(0, 16))}…</span>`,
-          "Stable across name changes",
-        );
-    if (current === "Ethernet")
-      body =
-        row(
-          "Connection",
-          status(n.ethernet.link, n.ethernet.ip || "Disconnected"),
-        ) +
-        `<form data-form="ethernet"><div class="form-grid form-spaced">${["address", "mask", "gateway", "dns"].map((k) => field(k, { address: "IPv4 address", mask: "Subnet mask", gateway: "Gateway", dns: "DNS server" }[k], i.ethernet_config[k] || "")).join("")}</div><p class="help-text">Leave the address empty to use automatic DHCP.</p><div class="form-actions"><button class="primary">Save Ethernet</button></div></form>`;
-    if (current === "Wi-Fi")
-      body =
-        button("Add network", "wifi-edit") +
-        `<div class="data-list list-spaced">${w.map((x, index) => `<div class="wifi-row ${x.enabled ? "" : "disabled"}" draggable="true" data-wifi="${esc(x.id)}"><span class="priority">${index + 1}</span><div class="wifi-copy"><strong>${esc(x.ssid)}</strong><span class="secondary">${n.wifi.connected && n.wifi.active === x.id ? "Connected" : x.enabled ? "Saved" : "Disabled"}</span></div><div class="wifi-actions">${button("↑", "wifi-up", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} up" ${index === 0 ? "disabled" : ""}`)}${button("↓", "wifi-down", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} down" ${index === w.length - 1 ? "disabled" : ""}`)}${button("Edit", "wifi-edit", `class="quiet edit-network" data-id="${x.id}"`)}<input type="checkbox" role="switch" data-toggle-wifi="${x.id}" aria-label="Enable ${esc(x.ssid)}" ${x.enabled ? "checked" : ""}>${button("Reconnect", "wifi-connect", `class="quiet" data-id="${x.id}" ${x.enabled ? "" : "disabled"}`)}${button("Remove", "wifi-remove", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div><p class="help-text">Passwords stay on this device. Drag rows or use arrows to change priority.</p><details class="disclosure"><summary>Priority behavior</summary><form data-form="policy">${field("preferred", "Preferred network check interval (seconds)", i.wifi_policy.preferred_check_secs, "number", 'min="60" max="3600"')}${field("retry", "Reconnect cooldown (seconds)", i.wifi_policy.retry_secs, "number", 'min="5" max="120"')}<label class="field-row"><input type="checkbox" name="prefer" ${i.wifi_policy.prefer_higher ? "checked" : ""}>Prefer higher-priority networks when stable</label><div class="form-actions"><button>Save behavior</button></div></form></details>`;
-    if (current === "Remote Access")
-      body =
-        row(
-          "Remote access",
-          `<input type="checkbox" role="switch" data-toggle-cloud aria-label="Enable remote access" ${i.cloud_enabled ? "checked" : ""}>`,
-          "Your device initiates the secure connection",
-        ) +
-        row(
-          "Cloud connection",
-          `<span class="secondary">${esc(remoteStatus(n.cloud))}</span>`,
-        ) +
-        row(
-          "Registered name",
-          `<span>${esc(n.registered_name || "Not registered yet")}</span>`,
-        ) +
-        row(
-          "Remote address",
-          `<a href="${esc(i.server)}/?device=${encodeURIComponent(i.name)}" target="_blank" rel="noreferrer">${esc(i.server.replace(/^https?:\/\//, ""))}</a>`,
-        ) +
-        row(
-          "Last connected",
-          `<span class="secondary">${n.last_cloud_connection ? new Date(n.last_cloud_connection * 1000).toLocaleString(language()) : "Not yet"}</span>`,
-        ) +
-        `<details class="disclosure"><summary>Advanced · custom server</summary><form data-form="server">${field("server", "Server URL", i.server, "url", "required")}<div class="form-actions"><button>Save server</button></div></form></details><p class="help-text">Cloudflare reserves only your name and public identity. All device settings stay here.</p>`;
-    if (current === "Security")
-      body =
-        row(
-          "Administrator password",
-          button("Change", "change-password"),
-          "Verified only on this device",
-        ) +
-        row(
-          "Active sessions",
-          button("Revoke all", "revoke"),
-          "Sessions expire after 24 hours",
-        ) +
-        row(
-          "Identity recovery",
-          button("Export recovery file", "identity-export"),
-          "Keep the file private. It proves ownership of reserved names.",
-        ) +
-        row(
-          "Restore an identity",
-          button("Restore…", "identity-restore"),
-          "Requires your recovery file and a new administrator password",
-        );
-    if (current === "System")
-      body =
-        row("Firmware", `<span class="mono">${esc(i.version)}</span>`) +
-        row(
-          "Uptime",
-          `<span class="mono">${Math.floor(h.uptime / 3600)}h ${Math.floor(h.uptime / 60) % 60}m</span>`,
-        ) +
-        row(
-          "Available memory",
-          `<span class="mono">${h.free_memory ? Math.round(h.free_memory / 1024) + " KiB" : "Host managed"}</span>`,
-        ) +
-        row(
-          "Configuration storage",
-          `<span class="mono">${Math.round((h.config_bytes || 0) / 102.4) / 10} / 24 KiB</span>`,
-        ) +
-        row("Recorded errors", `<span>${h.errors}</span>`) +
-        row(
-          "Factory reset",
-          button("Erase device…", "reset", 'class="danger"'),
-          "Reserved cloud names remain protected by your existing identity. Export recovery first.",
-        );
-    content = `<div class="page-body"><div class="settings-layout" ${section ? `data-section="${esc(section)}"` : ""}><nav class="settings-nav" aria-label="Settings sections">${sections.map((x) => button(x, "settings-section", `data-section="${x}" ${current === x ? 'aria-current="page"' : ""}`)).join("")}</nav><section class="settings-section">${button("‹ Settings", "settings-back", 'class="settings-back"')}<h2>${current}</h2><p class="section-caption">${{ General: "The name and identity of this DRouter.", Ethernet: "The wired connection to your BirdDog network.", "Wi-Fi": "Networks are tried from highest to lowest priority.", "Remote Access": "Connect securely from outside your local network.", "Access Control": "Simple Mode and Event Mode access.", Security: "Your device is the only password authority.", System: "Software, storage, and recovery." }[current]}</p>${body}</section></div></div>`;
+    content = `<div class="page-body settings-single">
+      <section class="settings-card" aria-label="Device"><h2>Device</h2>
+        ${row("Device name", `<span class="inline-actions">${esc(i.name)}${button("Change", "change-name")}</span>`, "Also used for remote login")}
+        ${row("Appearance", button(theme() === "dark" ? "Dark" : "Light", "theme"))}
+        ${row("Device identity", `<span class="mono secondary">${esc(i.device_id.slice(0, 16))}…</span>`, "Stable across name changes")}
+      </section>
+      <section class="settings-card" aria-label="Network"><h2>Network</h2>
+        ${row("Ethernet", status(n.ethernet.link, n.ethernet.ip || "Disconnected"))}
+        <form data-form="ethernet"><div class="form-grid">${["address", "mask", "gateway", "dns"].map((k) => field(k, { address: "IPv4 address", mask: "Subnet mask", gateway: "Gateway", dns: "DNS server" }[k], i.ethernet_config[k] || "")).join("")}</div><p class="help-text">Leave the address empty to use automatic DHCP.</p><div class="form-actions"><button class="primary">Save Ethernet</button></div></form>
+        <h3>Wi-Fi</h3>
+        ${button("Add network", "wifi-edit")}
+        <div class="data-list list-spaced">${w.map((x, index) => `<div class="wifi-row ${x.enabled ? "" : "disabled"}" data-wifi="${esc(x.id)}"><span class="priority">${index + 1}</span><div class="wifi-copy"><strong>${esc(x.ssid)}</strong><span class="secondary">${n.wifi.connected && n.wifi.active === x.id ? "Connected" : x.enabled ? "Saved" : "Disabled"}</span></div><div class="wifi-actions">${button("↑", "wifi-up", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} up" ${index === 0 ? "disabled" : ""}`)}${button("↓", "wifi-down", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} down" ${index === w.length - 1 ? "disabled" : ""}`)}${button("Edit", "wifi-edit", `class="quiet edit-network" data-id="${x.id}"`)}<input type="checkbox" role="switch" data-toggle-wifi="${x.id}" aria-label="Enable ${esc(x.ssid)}" ${x.enabled ? "checked" : ""}>${button("Reconnect", "wifi-connect", `class="quiet" data-id="${x.id}" ${x.enabled ? "" : "disabled"}`)}${button("Remove", "wifi-remove", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div><p class="help-text">Passwords stay on this device. Use arrows to change priority.</p>
+      </section>
+      <section class="settings-card" aria-label="Remote access"><h2>Remote access</h2>
+        ${row("Remote access", `<input type="checkbox" role="switch" data-toggle-cloud aria-label="Enable remote access" ${i.cloud_enabled ? "checked" : ""}>`, "Your device initiates the secure connection")}
+        ${row("Connection", `<span class="secondary">${esc(remoteStatus(n.cloud))}</span>`)}
+        ${row("Registered name", `<span>${esc(n.registered_name || "Not registered yet")}</span>`)}
+        ${row("Remote address", `<a href="${esc(i.server)}/?device=${encodeURIComponent(i.name)}" target="_blank" rel="noreferrer">${esc(i.server.replace(/^https?:\/\//, ""))}</a>`)}
+        <details class="disclosure"><summary>Custom server</summary><form data-form="server">${field("server", "Server URL", i.server, "url", "required")}<div class="form-actions"><button>Save server</button></div></form></details>
+      </section>
+      <section class="settings-card" aria-label="Access"><h2>Access</h2><div id="control-host"></div></section>
+      <section class="settings-card" aria-label="Security"><h2>Security</h2>
+        ${row("Administrator password", button("Change", "change-password"), "Verified only on this device")}
+        ${row("Active sessions", button("Revoke all", "revoke"), "Sessions expire after 24 hours")}
+        ${row("Identity recovery", button("Export recovery file", "identity-export"), "Keep the file private.")}
+        ${row("Restore an identity", button("Restore…", "identity-restore"), "Requires your recovery file and a new password")}
+      </section>
+      <section class="settings-card" aria-label="System"><h2>System</h2>
+        ${row("Firmware", `<span class="mono">${esc(i.version)}</span>`)}
+        ${row("Uptime", `<span class="mono">${Math.floor(h.uptime / 3600)}h ${Math.floor(h.uptime / 60) % 60}m</span>`)}
+        ${row("Available memory", `<span class="mono">${h.free_memory ? Math.round(h.free_memory / 1024) + " KiB" : "Host managed"}</span>`)}
+        ${row("Recorded errors", `<span>${h.errors}</span>`)}
+        ${row("Factory reset", button("Erase device…", "reset", 'class="danger"'), "Export recovery first. Reserved names stay protected.")}
+      </section>
+    </div>`;
   }
   root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong>${esc(i.name)}</strong><span class="secondary">Local</span></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${status(true, "Local connection")}${button(theme() === "dark" ? "☀" : "☾", "theme", 'class="quiet icon-button" aria-label="Change appearance"')}${button("↪", "logout", 'class="quiet icon-button" aria-label="Disconnect"')}</div></header><nav class="app-nav" aria-label="Main navigation">${Object.keys(
     icons,
@@ -438,7 +346,7 @@ function render() {
     )
     .join(
       "",
-    )}<button type="button" data-action="more" class="mobile-more" aria-controls="more-menu" aria-expanded="false">${icon('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>')}<span>More</span></button><div class="nav-footer">DRouter ${esc(i.version)}</div></nav><div class="more-backdrop" data-action="close-more" hidden aria-hidden="true"></div><div class="more-menu" id="more-menu" role="region" aria-label="More" hidden>${["Devices", "Simple Modes"].map((name) => button(icons[name] + `<span>${t(name)}</span>`, "page", `data-page="${name}"`)).join("")}${button(icons.Settings + "Wi-Fi", "open-wifi")}<div class="more-preferences">${languageControl()}${button("Change appearance", "theme", 'class="quiet"')}</div></div><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1></div><div class="page-actions">${actions}</div></header>${content}</main></div>`;
+    )}<button type="button" data-action="more" class="mobile-more" aria-controls="more-menu" aria-expanded="false">${icon('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>')}<span>More</span></button><div class="nav-footer">DRouter ${esc(i.version)}</div></nav><div class="more-backdrop" data-action="close-more" hidden aria-hidden="true"></div><div class="more-menu" id="more-menu" role="region" aria-label="More" hidden><div class="more-preferences">${languageControl()}${button("Change appearance", "theme", 'class="quiet"')}</div></div><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1></div><div class="page-actions">${actions}</div></header>${content}</main></div>`;
   if (root.querySelector("#control-host"))
     controlCleanup = mountControl(
       root.querySelector("#control-host"),
@@ -448,90 +356,31 @@ function render() {
         data.info = await client.call("device.info");
       },
     );
-  root.querySelectorAll("[data-wifi]").forEach((el) => {
-    el.ondragstart = () => (dragId = el.dataset.wifi);
-    el.ondragover = (e) => e.preventDefault();
-    el.ondrop = (e) => {
-      e.preventDefault();
-      const ids = w.map((x) => x.id).filter((x) => x !== dragId);
-      ids.splice(
-        w.findIndex((x) => x.id === el.dataset.wifi),
-        0,
-        dragId,
-      );
-      if (dragId) run(() => client.call("wifi.reorder", { ids }));
-    };
-  });
   root.querySelectorAll("[data-form]").forEach(
     (f) =>
       (f.onsubmit = (e) => {
         e.preventDefault();
         const v = Object.fromEntries(new FormData(f));
         run(() =>
-          f.dataset.form === "policy"
-            ? settings({
-                wifi_policy: {
-                  preferred_check_secs: +v.preferred,
-                  retry_secs: +v.retry,
-                  prefer_higher: !!v.prefer,
-                },
-              })
-            : f.dataset.form === "server"
-              ? settings({ server: v.server })
-              : settings({
-                  ethernet: Object.fromEntries(
-                    ["address", "mask", "gateway", "dns"].map((k) => [
-                      k,
-                      v[k] || null,
-                    ]),
-                  ),
-                }),
+          f.dataset.form === "server"
+            ? settings({ server: v.server })
+            : settings({
+                ethernet: Object.fromEntries(
+                  ["address", "mask", "gateway", "dns"].map((k) => [
+                    k,
+                    v[k] || null,
+                  ]),
+                ),
+              }),
         );
       }),
   );
 }
 async function settings(values) {
-  if (
-    (values.ethernet || values.server || values.cloud_enabled !== undefined) &&
-    !(await confirmChange(
-      "Change network settings?",
-      "This may interrupt your connection. Keep local Ethernet or physical recovery access available.",
-    ))
-  )
-    return;
   return client.call("settings.update", {
     expected_revision: data.info.revision,
     ...values,
   });
-}
-function presetBody(p) {
-  return p.routes
-    .map(
-      ([id, source]) =>
-        `<div class="preset-route"><span>${esc(data.receivers.find((x) => x.config.id === id)?.config.label || "Removed output")}<small>${esc(data.receivers.find((x) => x.config.id === id)?.state.source || "Unavailable")}</small></span><span>${esc(source)}</span></div>`,
-    )
-    .join("");
-}
-function applyPreset(p) {
-  modal(
-    `Apply ${p.name}?`,
-    presetBody(p),
-    "Apply preset",
-    async () => {
-      const v = await client.call("presets.apply", { id: p.id });
-      const report = v.results
-        .map(
-          (x) =>
-            `${data.receivers.find((r) => r.config.id === x.receiver)?.config.label || x.receiver}: ${x.ok ? "Verified" : x.error}`,
-        )
-        .join("\n");
-      if (v.results.some((x) => !x.ok)) {
-        failure = report;
-        message = "";
-      } else message = report;
-    },
-    `${p.routes.length} outputs will be updated and verified.`,
-  );
 }
 function editWifi(w) {
   modal(
@@ -585,12 +434,6 @@ async function action(d) {
     trigger.focus();
     return;
   }
-  if (d.action === "open-wifi") {
-    page = "Settings";
-    section = "Wi-Fi";
-    render();
-    return;
-  }
   if (d.action === "event-toggle") {
     d.element.disabled = true;
     try {
@@ -615,15 +458,9 @@ async function action(d) {
     if (busy) return;
     page = d.page;
     window.scrollTo({ top: 0, behavior: "instant" });
-    section = "";
     message = "";
     failure = "";
     outputSearch = "";
-    render();
-    return;
-  }
-  if (d.action === "settings-section" || d.action === "settings-back") {
-    section = d.section || "";
     render();
     return;
   }
@@ -696,56 +533,22 @@ async function action(d) {
     );
     return;
   }
-  if (d.action === "save-preset") {
+  if (d.action === "rename-receiver") {
+    const item = data.receivers.find((x) => x.config.id === d.id);
     modal(
-      "Save current routing",
-      field("name", "Preset name", "", "text", "required"),
-      "Save preset",
-      (f) => client.call("presets.create", { name: f.name }),
-      "Capture the actual sources reported by your outputs.",
-    );
-    return;
-  }
-  if (["apply-preset", "inspect-preset", "preset-detail"].includes(d.action)) {
-    const p = data.presets.find((x) => x.id === d.id);
-    if (d.action === "apply-preset") applyPreset(p);
-    else
-      modal(
-        p.name,
-        presetBody(p) +
-          (d.action === "preset-detail"
-            ? `<div class="form-actions">${button("Rename", "rename-preset", `data-id="${p.id}"`)}${button("Delete", "delete-preset", `data-id="${p.id}" class="danger"`)}</div>`
-            : ""),
-      );
-    return;
-  }
-  if (d.action === "rename-preset" || d.action === "rename-receiver") {
-    const preset = d.action === "rename-preset",
-      item = (preset ? data.presets : data.receivers).find(
-        (x) => (x.id || x.config.id) === d.id,
-      );
-    modal(
-      "Rename " + (preset ? "preset" : "receiver"),
-      field("name", "Name", item.name || item.config.label, "text", "required"),
+      "Rename receiver",
+      field("name", "Name", item.config.label, "text", "required"),
       "Save name",
-      (f) =>
-        client.call(preset ? "presets.update" : "receivers.rename", {
-          id: d.id,
-          name: f.name,
-        }),
+      (f) => client.call("receivers.rename", { id: d.id, name: f.name }),
     );
     return;
   }
-  if (d.action === "delete-preset" || d.action === "remove-receiver") {
+  if (d.action === "remove-receiver") {
     modal(
-      d.action === "delete-preset" ? "Delete preset?" : "Remove receiver?",
-      "<p>This removes the saved entry from your DRouter.</p>",
+      "Remove receiver?",
+      "<p>This removes the receiver from your DRouter.</p>",
       "Remove",
-      () =>
-        client.call(
-          d.action === "delete-preset" ? "presets.delete" : "receivers.remove",
-          { id: d.id },
-        ),
+      () => client.call("receivers.remove", { id: d.id }),
     );
     return;
   }
@@ -923,9 +726,12 @@ document.addEventListener("change", (e) => {
       const result = await settings({ cloud_enabled: e.target.checked });
       if (result?.reauthenticate)
         logout("Remote access updated. Reconnect to continue.", "success");
+      else {
+        message = e.target.checked
+          ? "Remote access enabled."
+          : "Remote access disabled.";
+      }
     });
-  if (e.target.matches("[data-select=preset]") && e.target.value)
-    applyPreset(data.presets.find((x) => x.id === e.target.value));
   if (e.target.matches("[data-available]"))
     dialog.querySelector("[name=ssid]").value = e.target.value;
 });
@@ -940,9 +746,9 @@ setInterval(() => {
     client &&
     !busy &&
     !dialog &&
-    !controlCleanup &&
     !restrictedCleanup &&
     !root.querySelector("form[data-form]:focus-within") &&
+    !root.querySelector(".inline-editor") &&
     document.visibilityState === "visible"
   )
     void refresh()

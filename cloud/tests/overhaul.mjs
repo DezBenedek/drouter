@@ -115,13 +115,7 @@ export async function checkOverhaul({
         path: `${root}/docs/screenshots/${kind}-redesign-desktop.png`,
         fullPage: true,
       });
-      for (const page of [
-        "Sources",
-        "Devices",
-        "Presets",
-        "Simple Modes",
-        "Settings",
-      ]) {
+      for (const page of ["Sources", "Devices", "Settings"]) {
         await p.getByRole("button", { name: page, exact: true }).click();
         assert(
           await eventSwitch.isVisible(),
@@ -129,7 +123,7 @@ export async function checkOverhaul({
         );
         if (page === "Sources")
           await p.locator("[data-control=source-add]").waitFor();
-        if (page === "Simple Modes")
+        if (page === "Settings")
           await p.locator("[data-control=profile-add]").waitFor();
         await p.screenshot({
           path: `${root}/docs/screenshots/${kind}-${page.toLowerCase().replaceAll(" ", "-")}-desktop.png`,
@@ -173,9 +167,7 @@ export async function checkOverhaul({
         .first()
         .waitFor();
       // Numbered profile actions, limit, keyboard controls and save are one workflow.
-      await p
-        .getByRole("button", { name: "Simple Modes", exact: true })
-        .click();
+      await p.getByRole("button", { name: "Settings", exact: true }).click();
       await p
         .getByRole("button", { name: "Create Simple Mode", exact: true })
         .click();
@@ -350,13 +342,10 @@ export async function checkOverhaul({
       await p.locator('.toast[data-kind="error"]').waitFor({ timeout: 15000 });
       assert.equal(await failButton.getAttribute("aria-pressed"), "false");
       await fault({ receiver: 0, ignore_switch: false });
-      await p.getByRole("button", { name: "More", exact: true }).click();
-      await p
-        .locator(".more-menu")
-        .getByRole("button", { name: "Devices", exact: true })
-        .click();
+      if (await p.locator(".more-menu").isVisible())
+        await p.getByRole("button", { name: "More", exact: true }).click();
+      await p.getByRole("button", { name: "Devices", exact: true }).click();
       await p.getByRole("heading", { name: "Devices", exact: true }).waitFor();
-      assert.equal(await p.locator(".more-menu").isVisible(), false);
       await transition(true);
       await transition(false);
       await p.getByRole("button", { name: "Routing", exact: true }).click();

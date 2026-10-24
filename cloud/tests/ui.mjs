@@ -16,19 +16,12 @@ export async function checkRemoteAccess({ local, password, root }) {
     await connect();
     for (const enabled of [false, true]) {
       await p.getByRole("button", { name: "Settings", exact: true }).click();
-      await p
-        .getByRole("button", { name: "Remote Access", exact: true })
-        .click();
       const toggle = p.getByRole("switch", {
         name: "Enable remote access",
         exact: true,
       });
       assert.equal(await toggle.isChecked(), !enabled);
       await toggle.click();
-      await p
-        .getByRole("dialog")
-        .getByRole("button", { name: "Confirm", exact: true })
-        .click();
       await p
         .getByRole("heading", { name: "Connect to your DRouter", exact: true })
         .waitFor();
@@ -49,9 +42,8 @@ export async function checkRemoteAccess({ local, password, root }) {
       await connect();
     }
     await p.getByRole("button", { name: "Settings", exact: true }).click();
-    await p.getByRole("button", { name: "Remote Access", exact: true }).click();
     await p
-      .locator(".settings-section")
+      .locator('section[aria-label="Remote access"]')
       .getByText("Connected", { exact: true })
       .waitFor({ timeout: 60000 });
     assert.equal(
@@ -62,7 +54,6 @@ export async function checkRemoteAccess({ local, password, root }) {
       path: `${root}/docs/screenshots/local-remote-access-mobile.png`,
     });
     await p.getByRole("button", { name: "Settings", exact: true }).click();
-    await p.getByRole("button", { name: "Security", exact: true }).click();
     await p
       .getByText("Sessions expire after 24 hours", { exact: true })
       .waitFor();
@@ -214,7 +205,6 @@ export async function checkInterfaces({
         () => !document.querySelector(".output-open:disabled"),
       );
       await p.getByRole("button", { name: "Settings", exact: true }).click();
-      await p.getByRole("button", { name: "Wi-Fi", exact: true }).click();
       await capture(p, `${kind}-wifi-mobile`);
       await p.getByRole("button", { name: "Add network", exact: true }).click();
       await p.getByRole("dialog").waitFor();
@@ -234,14 +224,6 @@ export async function checkInterfaces({
         .click();
       if (await p.locator(".more-menu").isVisible())
         await p.getByRole("button", { name: "More", exact: true }).click();
-      await p.getByRole("button", { name: "Presets", exact: true }).click();
-      await p.getByRole("button", { name: "Apply", exact: true }).click();
-      await p
-        .getByRole("dialog")
-        .getByRole("heading", { name: "Apply Opening?" })
-        .waitFor();
-      await capture(p, `${kind}-preset-mobile`);
-      await p.keyboard.press("Escape");
       await p.getByRole("button", { name: "Routing", exact: true }).click();
       await p.setViewportSize({ width: 1366, height: 900 });
     }

@@ -248,7 +248,7 @@ export async function modification3({
     assert.equal(independent[1].source, sourceA);
     assert.equal(await p.locator(".other-source .other-active").count(), 1);
     assert.equal((await admin.call("sources.saved.list")).length, 2);
-    await p.getByRole("button", { name: "Simple Modes", exact: true }).click();
+    await p.getByRole("button", { name: "Settings", exact: true }).click();
     await p
       .getByRole("button", { name: "Create Simple Mode", exact: true })
       .click();
@@ -310,16 +310,13 @@ export async function modification3({
       "independent searchable Other source selectors route original identifiers without saving; profile editor saves multiple buttons directly and confirms destructive changes",
     );
     await p.getByRole("button", { name: "Settings", exact: true }).click();
-    await p
-      .getByRole("button", { name: "Access Control", exact: true })
-      .click();
     await p.locator('a[href="mailto:benedek@dezso.hu"]').waitFor();
     assert.equal(
       await p.locator('a[href="mailto:benedek@dezso.hu"]').count(),
       1,
     );
     await p.locator("[data-language]").first().selectOption("hu");
-    await p.getByText("Kapcsolat", { exact: true }).waitFor();
+    await p.getByRole("heading", { name: "Beállítások", exact: true }).waitFor();
     await p.screenshot({
       animations: "disabled",
       path: `${root}/docs/screenshots/access-control-hu.png`,

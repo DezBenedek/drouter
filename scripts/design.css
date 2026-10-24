@@ -1566,14 +1566,12 @@ small,
   .app-nav [data-nav="Sources"] {
     grid-area: 1 / 2;
   }
-  .app-nav [data-nav="Presets"] {
+  .app-nav [data-nav="Devices"] {
     grid-area: 1 / 3;
   }
   .app-nav [data-nav="Settings"] {
     grid-area: 1 / 4;
   }
-  .app-nav [data-nav="Devices"],
-  .app-nav [data-nav="Simple Modes"],
   .nav-footer {
     display: none;
   }

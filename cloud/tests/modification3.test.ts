@@ -111,7 +111,6 @@ describe("Modification 3 protocol and translation coverage", () => {
       "Connect to your DRouter",
       "Welcome to DRouter",
       "Wi-Fi password",
-      "Apply preset",
       "Confirm changes",
       "Authentication failed",
       "Simple Mode is temporarily locked by the administrator.",
