@@ -2,6 +2,20 @@ import assert from "node:assert/strict";
 import { chromium } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
+async function settleToast(locator) {
+  await locator.evaluate(async (el) => {
+    const root = el.closest("[data-sonner-toast]") || el;
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    await Promise.all(
+      root
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished),
+    );
+  });
+}
+
 // Real simulator + relay browser acceptance for the redesigned workflows.
 export async function checkOverhaul({
   local,
@@ -72,12 +86,13 @@ export async function checkOverhaul({
         .locator('.toast[data-kind="success"]')
         .filter({ hasText: "Routing verified" });
       await desktopToast.waitFor();
-      await desktopToast.evaluate((el) =>
-        Promise.all(el.getAnimations().map((animation) => animation.finished)),
-      );
+      await settleToast(desktopToast);
       const desktopBox = await desktopToast.boundingBox();
       assert(Math.abs(desktopBox.x - 24) <= 1);
-      assert(Math.abs(1000 - desktopBox.y - desktopBox.height - 24) <= 1);
+      assert(
+        Math.abs(1000 - desktopBox.y - desktopBox.height - 24) <= 1,
+        `${kind} toast placement: ${JSON.stringify(desktopBox)}`,
+      );
       await p.screenshot({
         path: `${root}/docs/screenshots/${kind}-toast-desktop.png`,
       });
@@ -176,7 +191,7 @@ export async function checkOverhaul({
       assert(await editor.isVisible(), "Failed form stays open");
       assert(
         await editor
-          .locator(".toast-region")
+          .locator(".toast-region, .feedback-layer")
           .evaluate((el) => el.matches(":popover-open")),
         "Modal errors appear in the top layer",
       );
@@ -248,6 +263,32 @@ export async function checkOverhaul({
         assert(await eventSwitch.isVisible());
       }
       await p.setViewportSize({ width: 390, height: 844 });
+      // Mobile overflow is dismissible without selecting a destination.
+      const more = p.getByRole("button", { name: "More", exact: true });
+      await more.click();
+      await p.locator(".more-menu").waitFor({ state: "visible" });
+      await p.keyboard.press("Escape");
+      assert.equal(await more.getAttribute("aria-expanded"), "false");
+      await more.click();
+      await p.locator(".more-backdrop").click({ position: { x: 8, y: 8 } });
+      assert.equal(await more.getAttribute("aria-expanded"), "false");
+      assert.equal(await p.locator(".more-menu").isVisible(), false);
+      if (kind === "remote")
+        assert.equal(
+          await p
+            .locator(".feedback-layer > section[data-react-aria-top-layer]")
+            .count(),
+          1,
+        );
+      const outputSearch = p.getByRole("searchbox", {
+        name: "Find an output",
+        exact: true,
+      });
+      await outputSearch.fill("no-such-output");
+      await p
+        .getByRole("heading", { name: "No matching outputs", exact: true })
+        .waitFor();
+      await outputSearch.fill("");
       const receiver = (await admin.call("receivers.list"))[0];
       const choices = await admin.call("sources.saved.list");
       const target = choices.find((s) => s.source !== receiver.state.source);
@@ -275,9 +316,7 @@ export async function checkOverhaul({
         .locator('.toast[data-kind="success"]')
         .filter({ hasText: "Routing verified" });
       await mobileToast.waitFor();
-      await mobileToast.evaluate((el) =>
-        Promise.all(el.getAnimations().map((animation) => animation.finished)),
-      );
+      await settleToast(mobileToast);
       const toastBox = await mobileToast.boundingBox(),
         navBox = await p.locator(".app-nav").boundingBox();
       assert(
@@ -339,6 +378,11 @@ export async function checkOverhaul({
       );
       await p.getByRole("button", { name: "More", exact: true }).click();
       await p.locator(".more-menu [data-language]").selectOption("hu");
+      if (kind === "remote")
+        assert.equal(
+          await p.locator(".topbar-actions .appearance-toggle").isVisible(),
+          false,
+        );
       await p
         .getByRole("heading", { name: "Útválasztás", exact: true })
         .waitFor();

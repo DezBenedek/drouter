@@ -9,6 +9,7 @@ import {
 import { installLocalization } from "../../../firmware/web/shared/i18n.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { Feedback } from "./feedback";
 import {
   ArrowDown,
   ArrowLeft,
@@ -169,7 +170,7 @@ function App() {
         <footer className="auth-foot">
           <span>Password verified on your device</span>
           <Button
-            variant="quiet icon-button"
+            variant="quiet icon-button appearance-toggle"
             aria-label="Change appearance"
             onClick={() => setAppearance(toggleTheme())}
           >
@@ -205,6 +206,32 @@ function Workspace({
     [outputSearch, setOutputSearch] = useState("");
   useFeedback(error, "error");
   useFeedback(message, "success");
+  const previousPage = useRef(page);
+  useEffect(() => {
+    if (previousPage.current !== page) {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      previousPage.current = page;
+    }
+  }, [page]);
+  useEffect(() => {
+    if (!more) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setMore(false);
+        document.querySelector<HTMLButtonElement>(".mobile-more")?.focus();
+      }
+    };
+    const resize = () => {
+      if (innerWidth >= 900) setMore(false);
+    };
+    document.addEventListener("keydown", close);
+    window.addEventListener("resize", resize);
+    document.querySelector<HTMLButtonElement>(".more-menu button")?.focus();
+    return () => {
+      document.removeEventListener("keydown", close);
+      window.removeEventListener("resize", resize);
+    };
+  }, [more]);
   const working = useRef(false);
   const ended = useRef(false);
   function logout(message = "", kind = "success") {
@@ -681,7 +708,7 @@ function Workspace({
             Live device connection
           </span>
           <Button
-            variant="quiet icon-button"
+            variant="quiet icon-button appearance-toggle"
             aria-label="Change appearance"
             onClick={changeTheme}
           >
@@ -716,6 +743,7 @@ function Workspace({
         ))}
         <Button
           className="mobile-more"
+          aria-controls="more-menu"
           aria-expanded={more}
           aria-current={
             ["Devices", "Simple Modes"].includes(page) ? "page" : undefined
@@ -725,65 +753,60 @@ function Workspace({
           <MoreHorizontal />
           <span>More</span>
         </Button>
-        <div className="nav-footer">
-          Standalone by design
-          <br />
-          DRouter {data.info.version}
-        </div>
+        <div className="nav-footer">DRouter {data.info.version}</div>
       </nav>
       {more && (
-        <div className="more-menu">
-          {pages
-            .filter((p) => ["Devices", "Simple Modes"].includes(p.name))
-            .map((p) => (
-              <Button
-                key={p.name}
-                onClick={() => {
-                  setPage(p.name);
-                  setMore(false);
-                  setError("");
-                  setMessage("");
-                }}
-              >
-                <p.icon />
-                <span>{p.name}</span>
-              </Button>
-            ))}
-          <Button
-            onClick={() => {
-              setPage("Settings");
-              setSection("Wi-Fi");
-              setMore(false);
-            }}
+        <>
+          <div
+            className="more-backdrop"
+            onClick={() => setMore(false)}
+            aria-hidden="true"
+          />
+          <div
+            className="more-menu"
+            role="region"
+            aria-label="More"
+            id="more-menu"
           >
-            <SettingsIcon />
-            Wi-Fi
-          </Button>
-          <div className="more-preferences">
-            <span data-language-host />
-            <Button variant="quiet" onClick={changeTheme}>
-              Change appearance
+            {pages
+              .filter((p) => ["Devices", "Simple Modes"].includes(p.name))
+              .map((p) => (
+                <Button
+                  key={p.name}
+                  onClick={() => {
+                    setPage(p.name);
+                    setMore(false);
+                    setError("");
+                    setMessage("");
+                  }}
+                >
+                  <p.icon />
+                  <span>{p.name}</span>
+                </Button>
+              ))}
+            <Button
+              onClick={() => {
+                setPage("Settings");
+                setSection("Wi-Fi");
+                setMore(false);
+              }}
+            >
+              <SettingsIcon />
+              Wi-Fi
             </Button>
+            <div className="more-preferences">
+              <span data-language-host />
+              <Button variant="quiet" onClick={changeTheme}>
+                Change appearance
+              </Button>
+            </div>
           </div>
-        </div>
+        </>
       )}
       <main id="main" className="app-main">
         <header className="page-header">
           <div className="page-heading">
             <h1>{page}</h1>
-            <p className="secondary">
-              {page === "Routing"
-                ? "Select a source for each output"
-                : page === "Devices"
-                  ? "BirdDog receivers on your network"
-                  : page === "Presets"
-                    ? "Routing arrangements saved on this device"
-                    : page === "Sources"
-                      ? "Choose the sources that appear in Routing"
-                      : page === "Simple Modes"
-                        ? "Focused controls for your team"
-                        : "Device preferences and connectivity"}
-            </p>
           </div>
           <div className="page-actions">
             {page === "Routing" && data.presets.length > 0 && (
@@ -994,23 +1017,7 @@ function Workspace({
                   Settings
                 </Button>
                 <h2>{currentSection}</h2>
-                <p className="section-caption">
-                  {
-                    (
-                      {
-                        General: "The name and identity of this DRouter.",
-                        Ethernet:
-                          "The wired connection to your BirdDog network.",
-                        "Wi-Fi":
-                          "Networks are tried from highest to lowest priority.",
-                        "Remote Access":
-                          "Connect securely from outside your local network.",
-                        Security: "Your device is the only password authority.",
-                        System: "Software, storage, and recovery.",
-                      } as any
-                    )[currentSection]
-                  }
-                </p>
+
                 {currentSection === "Access Control" && (
                   <SharedControl client={client} page="Access Control" />
                 )}
@@ -1470,7 +1477,12 @@ function PresetRoutes({ preset, data }: { preset: Preset; data: Snapshot }) {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <>
+    <App />
+    <Feedback />
+  </>,
+);
 
 function SharedControl({
   client,

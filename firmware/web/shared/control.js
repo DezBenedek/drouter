@@ -1,6 +1,11 @@
 import { randomId } from "./client.js";
 import { t, languageControl, localize } from "./i18n.js";
-// Shared Sonner-style notifications: no React or extra runtime on the ESP32.
+// React can install Sonner without adding its runtime to the embedded UI.
+let toastAdapter;
+export function setToastAdapter(adapter) {
+  toastAdapter = adapter;
+}
+// Shared notifications for the standalone ESP32 interface.
 let toaster;
 const notifications = new Map();
 function placeToaster() {
@@ -22,6 +27,7 @@ function placeToaster() {
     toaster.showPopover();
 }
 export function dismissToast(id = "") {
+  if (toastAdapter) return toastAdapter.dismiss(id);
   for (const [key, item] of notifications) {
     if (id && key !== id) continue;
     clearTimeout(item.timer);
@@ -37,6 +43,7 @@ export function dismissToast(id = "") {
 }
 export function toast(message, kind = "info", id = "") {
   if (!message) return;
+  if (toastAdapter) return toastAdapter.show(message, kind, id);
   if (!toaster) {
     toaster = document.createElement("section");
     toaster.className = "toast-region";
@@ -140,7 +147,7 @@ function dialog(title, body, submit, action = "Save") {
   const d = document.createElement("dialog");
   d.className = "dialog control-dialog";
   d.setAttribute("aria-label", t(title));
-  d.innerHTML = `<form><header class="dialog-header"><h2>${t(title)}</h2>${b("Close", "close", 'class="quiet"')}</header><div class="dialog-body">${body}</div><footer class="dialog-footer">${b("Cancel", "close")}<button class="primary">${t(action)}</button></footer></form>`;
+  d.innerHTML = `<form><header class="dialog-header"><h2>${t(title)}</h2>${b('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg>', "close", `class="quiet icon-button" aria-label="${t("Close")}"`)}</header><div class="dialog-body">${body}</div><footer class="dialog-footer">${b("Cancel", "close")}<button class="primary">${t(action)}</button></footer></form>`;
   d.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -528,7 +535,7 @@ export function mountControl(host, client, page, changed = () => {}) {
   function selector(receiver, initialAll = false) {
     const d = editDialog(
       "Choose a source",
-      `<p>${t("Current source")}: ${e(labelFor(data, receiver.state.source))}</p><label class="field">${t("Search sources")}<input type="search" autocomplete="off" data-source-search></label><div class="inline-actions">${b("Saved sources", "saved")}${b("All Sources", "all")}</div><div data-options></div>`,
+      `<div class="source-current"><span class="status-dot ${receiver.state.online ? "" : "offline"}"></span><strong data-user-content>${e(labelFor(data, currentSource(receiver)))}</strong></div><label class="field"><span class="sr-only">${t("Search sources")}</span><input type="search" aria-label="${t("Search sources")}" placeholder="${t("Search sources")}" autocomplete="off" data-source-search></label><div class="inline-actions">${b("Saved sources", "saved")}${b("All Sources", "all")}</div><div data-options></div>`,
       () => {},
       "",
     );
@@ -536,6 +543,9 @@ export function mountControl(host, client, page, changed = () => {}) {
     d.querySelector(".dialog-header h2").textContent = receiver.config.label;
     d.querySelector(".dialog-header h2").setAttribute("data-user-content", "");
     d.querySelector(".dialog-footer").remove();
+    // Keep the keyboard closed on touch devices until the user asks to search.
+    if (matchMedia("(pointer: fine)").matches)
+      d.querySelector("[data-source-search]").focus();
     let query = "",
       showAll = initialAll || !data.saved.length;
     const draw = () => {
@@ -906,7 +916,7 @@ function controlMarkup(data, page, state) {
     }</div>`;
   }
   if (page === "Simple Modes")
-    return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><p class="help-text">${t("Each profile has its own password and 1–10 fixed action buttons.")}</p><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
+    return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
   if (page === "Access Control")
     return `<div class="settings-row"><div class="settings-copy">${t("Event Mode")}<span>${t(data.event.enabled ? "Enabled" : "Disabled")}</span></div>${b(data.event.enabled ? "Disable Event Mode" : "Enable Event Mode", "event")}</div><p class="help-text">${t("Enabling Event Mode will temporarily disable all Simple Modes. Only the administrator will be able to control DRouter.")}</p><div class="settings-row"><span>${t("Language")}</span>${languageControl()}</div><div class="settings-row"><span>${t("Contact")}</span><a href="mailto:benedek@dezso.hu">benedek@dezso.hu</a></div>`;
   if (page !== "Routing") return "";
@@ -925,7 +935,7 @@ function controlMarkup(data, page, state) {
       pending(r, s.source)
         ? '<span class="spinner" aria-hidden="true"></span>'
         : mobile
-          ? e(s.display_name)
+          ? `<span class="quick-label" data-user-content>${e(s.display_name)}</span>`
           : r.state.source === s.source
             ? "✓"
             : "·",
@@ -938,5 +948,27 @@ function controlMarkup(data, page, state) {
       "pick",
       `class="${mobile ? "all-sources" : ""}" data-id="${e(r.config.id)}" data-all="true" aria-haspopup="dialog" aria-label="${e(t("All Sources") + " · " + r.config.label)}" ${working || !r.state.online ? "disabled" : ""}`,
     );
-  return `<div class="routing-tools">${searchInput("Find an output", "output", search)}${searchInput("Find a source", "source", sourceSearch)}${b("Refresh sources", "refresh", working ? "disabled" : "")}</div>${!receivers.length ? `<div class="empty-state"><h2>${t("No outputs connected")}</h2><p>${t("Add a BirdDog receiver in Devices to start routing.")}</p></div>` : `<div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><thead><tr><th scope="col">${t("Source / output")}</th>${receivers.map((r) => `<th scope="col"><strong data-user-content>${e(r.config.label)}</strong><small class="output-source"><span class="status-dot ${r.state.online ? "" : "offline"}"></span> ${t(r.state.online ? "Online" : "Offline")}<br><span data-user-content>${e(labelFor(data, currentSource(r)))}</span>${!r.state.online && currentSource(r) ? ` · ${t("Last known")}` : ""}</small></th>`).join("")}</tr></thead><tbody>${saved.map((s, ri) => `<tr><th scope="row"><span data-user-content>${e(s.display_name)}</span>${data.sources.some((x) => x.name === s.source) ? "" : `<small class="output-source">${t("Unavailable")}</small>`}</th>${receivers.map((r, ci) => `<td>${routeButton(r, s, ri, ci)}</td>`).join("")}</tr>`).join("")}<tr class="other-source"><th scope="row">${t("All Sources")}</th>${receivers.map((r) => `<td class="${currentSource(r) && !data.saved.some((s) => s.source === currentSource(r)) ? "other-active" : ""}">${pickerButton(r)}</td>`).join("")}</tr></tbody></table></div><div class="matrix-footer"><span><span class="legend-mark">●</span>${t("Verified active source")}</span><span>${t("Select a crosspoint to route")}</span><span>${t("Arrow keys move between crosspoints")}</span></div><div class="output-list">${receivers.map((r, ci) => `<section class="output-row">${b(`<span class="output-text"><strong data-user-content>${e(r.config.label)}</strong><span class="current-route" data-user-content>${e(labelFor(data, currentSource(r)))}</span><span class="status-text"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}${!r.state.online && currentSource(r) ? ` · ${t("Last known")}` : ""}</span></span><span aria-hidden="true">›</span>`, "pick", `class="output-open" aria-label="${e(t("Change source for {output}", { output: r.config.label }))}" data-id="${e(r.config.id)}" ${working || !r.state.online ? "disabled" : ""}`)}<div class="output-quick"><div class="quick-sources" aria-label="${t("Saved sources")}">${data.saved.map((s, ri) => routeButton(r, s, ri, ci, true)).join("")}</div>${pickerButton(r, true)}</div></section>`).join("")}</div>`}`;
+  const refreshIcon =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></svg>';
+  const quickSources = (r) => {
+    const sources = data.saved.slice(0, 4);
+    const active = data.saved.find((s) => s.source === currentSource(r));
+    if (active && !sources.includes(active))
+      sources[sources.length - 1] = active;
+    return sources;
+  };
+  return `<div class="routing-overview"><span><span class="status-dot"></span><strong>${data.receivers.filter((r) => r.state.online).length}/${data.receivers.length}</strong> ${t("Online")}</span><span><strong>${data.saved.length}</strong> ${t("Saved sources")}</span></div><div class="routing-tools">${searchInput("Find an output", "output", search)}${searchInput("Find a source", "source", sourceSearch)}${b(`${refreshIcon}<span>${t("Refresh sources")}</span>`, "refresh", `aria-label="${t("Refresh sources")}" ${working ? "disabled" : ""}`)}</div>${
+    !receivers.length
+      ? `<div class="empty-state"><h2>${t(data.receivers.length ? "No matching outputs" : "No outputs connected")}</h2><p>${t(data.receivers.length ? "Try another search." : "Add a BirdDog receiver in Devices to start routing.")}</p></div>`
+      : `<div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><thead><tr><th scope="col">${t("Source / output")}</th>${receivers.map((r) => `<th scope="col"><strong data-user-content>${e(r.config.label)}</strong><small class="output-source"><span class="status-dot ${r.state.online ? "" : "offline"}"></span> ${t(r.state.online ? "Online" : "Offline")}<br><span data-user-content>${e(labelFor(data, currentSource(r)))}</span>${!r.state.online && currentSource(r) ? ` · ${t("Last known")}` : ""}</small></th>`).join("")}</tr></thead><tbody>${saved.map((s, ri) => `<tr><th scope="row"><span data-user-content>${e(s.display_name)}</span>${data.sources.some((x) => x.name === s.source) ? "" : `<small class="output-source">${t("Unavailable")}</small>`}</th>${receivers.map((r, ci) => `<td>${routeButton(r, s, ri, ci)}</td>`).join("")}</tr>`).join("")}<tr class="other-source"><th scope="row">${t("All Sources")}</th>${receivers.map((r) => `<td class="${currentSource(r) && !data.saved.some((s) => s.source === currentSource(r)) ? "other-active" : ""}">${pickerButton(r)}</td>`).join("")}</tr></tbody></table></div><div class="matrix-footer"><span><span class="legend-mark">●</span>${t("Verified active source")}</span><span>${t("Select a crosspoint to route")}</span></div><div class="output-list">${receivers
+          .map(
+            (r, ci) =>
+              `<section class="output-row" data-online="${r.state.online}"><div class="output-heading"><span class="output-index" aria-hidden="true">${String(ci + 1).padStart(2, "0")}</span><strong data-user-content>${e(r.config.label)}</strong><span class="status-text"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span></div>${b(`<span class="output-text"><small>${t(pendingRoute?.receiver === r.config.id ? "Switching…" : !r.state.online && currentSource(r) ? "Last known" : "Current source")}</small><span class="current-route" data-user-content>${e(labelFor(data, currentSource(r)))}</span></span><span class="output-chevron" aria-hidden="true">›</span>`, "pick", `class="output-open" aria-label="${e(t("Change source for {output}", { output: r.config.label }))}" data-id="${e(r.config.id)}" ${working || !r.state.online ? "disabled" : ""}`)}<div class="output-quick"><div class="quick-sources" aria-label="${t("Saved sources")}">${quickSources(
+                r,
+              )
+                .map((s, ri) => routeButton(r, s, ri, ci, true))
+                .join("")}</div>${pickerButton(r, true)}</div></section>`,
+          )
+          .join("")}</div>`
+  }`;
 }

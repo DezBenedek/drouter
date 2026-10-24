@@ -214,7 +214,7 @@ function setup() {
   if (setupStep === 0)
     content = `<div class="setup-welcome"><h1>Welcome to DRouter</h1><p>A direct connection between your NDI sources and BirdDog outputs.</p></div>`;
   if (setupStep === 1)
-    content = `<h1>Name your device</h1><p class="section-caption">Choose a name and a password for this DRouter.</p>${field("name", "Device name", s.name, "text", 'required minlength="3" maxlength="32" autocomplete="username" autocapitalize="none" placeholder="studio-router"')}${password("admin", "Create administrator password", true)}<p class="help-text">Use 4–128 Unicode characters. Short passwords are weak; use a longer password when possible.</p>`;
+    content = `<h1>Name your device</h1>${field("name", "Device name", s.name, "text", 'required minlength="3" maxlength="32" autocomplete="username" autocapitalize="none" placeholder="studio-router"')}${password("admin", "Create administrator password", true)}<p class="help-text">Use 4–128 Unicode characters. Short passwords are weak; use a longer password when possible.</p>`;
   if (setupStep === 2)
     content = `<h1>Connect to your network</h1><p class="section-caption">Ethernet works automatically. Wi-Fi is optional.</p><div class="setup-feature"><span>Ethernet</span>${status(setupNetwork.ethernet?.link, setupNetwork.ethernet?.ip || "DHCP · connect a cable")}</div>${s.profiles.map((w, i) => `<div class="setup-network"><span class="priority">${i + 1}</span><div>${esc(w.ssid)}</div>${button("Remove", "setup-wifi-remove", `data-index="${i}"`)}</div>`).join("")}<div class="form-actions">${button("Add Wi-Fi network", "setup-wifi")}</div><details class="disclosure"><summary>Manual Ethernet settings</summary><div class="form-grid">${["address", "mask", "gateway", "dns"].map((k) => field(k, { address: "IPv4 address", mask: "Subnet mask", gateway: "Gateway", dns: "DNS server" }[k], s.ethernet?.[k] || "")).join("")}</div><p class="help-text">Leave the address empty for automatic DHCP.</p></details>`;
   if (setupStep === 3)
@@ -438,7 +438,7 @@ function render() {
     )
     .join(
       "",
-    )}<button type="button" data-action="more" class="mobile-more" aria-expanded="false">${icon('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>')}<span>More</span></button><div class="nav-footer">Standalone by design<br>DRouter ${esc(i.version)}</div></nav><div class="more-menu" hidden>${["Devices", "Simple Modes"].map((name) => button(icons[name] + `<span>${t(name)}</span>`, "page", `data-page="${name}"`)).join("")}${button(icons.Settings + "Wi-Fi", "open-wifi")}<div class="more-preferences">${languageControl()}${button("Change appearance", "theme", 'class="quiet"')}</div></div><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1><p class="secondary">${page === "Routing" ? "Select a source for each output" : page === "Devices" ? "BirdDog receivers on your network" : page === "Presets" ? "Routing arrangements saved on this device" : page === "Sources" ? "Choose the sources that appear in Routing" : page === "Simple Modes" ? "Focused controls for your team" : "Device preferences and connectivity"}</p></div><div class="page-actions">${actions}</div></header>${content}</main></div>`;
+    )}<button type="button" data-action="more" class="mobile-more" aria-controls="more-menu" aria-expanded="false">${icon('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>')}<span>More</span></button><div class="nav-footer">DRouter ${esc(i.version)}</div></nav><div class="more-backdrop" data-action="close-more" hidden aria-hidden="true"></div><div class="more-menu" id="more-menu" role="region" aria-label="More" hidden>${["Devices", "Simple Modes"].map((name) => button(icons[name] + `<span>${t(name)}</span>`, "page", `data-page="${name}"`)).join("")}${button(icons.Settings + "Wi-Fi", "open-wifi")}<div class="more-preferences">${languageControl()}${button("Change appearance", "theme", 'class="quiet"')}</div></div><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1></div><div class="page-actions">${actions}</div></header>${content}</main></div>`;
   if (root.querySelector("#control-host"))
     controlCleanup = mountControl(
       root.querySelector("#control-host"),
@@ -572,7 +572,17 @@ async function action(d) {
   if (d.action === "more") {
     const menu = root.querySelector(".more-menu");
     menu.hidden = !menu.hidden;
+    root.querySelector(".more-backdrop").hidden = menu.hidden;
     d.element.setAttribute("aria-expanded", !menu.hidden);
+    if (!menu.hidden) menu.querySelector("button")?.focus();
+    return;
+  }
+  if (d.action === "close-more") {
+    root.querySelector(".more-menu").hidden = true;
+    root.querySelector(".more-backdrop").hidden = true;
+    const trigger = root.querySelector(".mobile-more");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.focus();
     return;
   }
   if (d.action === "open-wifi") {
@@ -604,6 +614,7 @@ async function action(d) {
   if (d.action === "page") {
     if (busy) return;
     page = d.page;
+    window.scrollTo({ top: 0, behavior: "instant" });
     section = "";
     message = "";
     failure = "";
@@ -948,3 +959,13 @@ fetch("/bootstrap")
 installLocalization();
 
 window.addEventListener("pagehide", () => client?.close());
+
+// Dismiss the mobile overflow panel using the same interactions as the cloud UI.
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && root.querySelector(".more-menu:not([hidden])"))
+    void action({ action: "close-more" });
+});
+window.addEventListener("resize", () => {
+  if (innerWidth >= 900 && root.querySelector(".more-menu:not([hidden])"))
+    void action({ action: "close-more" });
+});
