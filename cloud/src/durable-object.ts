@@ -166,7 +166,7 @@ export class RouterRelay extends DurableObject<Env> {
           throw new Error("Invalid request");
         const device = this.device();
         if (!device || a.stage === "fake") {
-          if (a.stage === "new") {
+          if (a.stage === "new" && frame.type === "auth.start") {
             a.stage = "fake";
             ws.serializeAttachment(a);
             const randomHex = (n: number) =>
@@ -209,7 +209,12 @@ export class RouterRelay extends DurableObject<Env> {
           throw new Error("Invalid reply");
         if (reply.type === "auth.challenge" && b.stage === "new")
           b.stage = "challenge";
-        else if (reply.type === "auth.ok" && b.stage === "challenge") {
+        else if (reply.type === "auth.resume.challenge" && b.stage === "new")
+          b.stage = "resume";
+        else if (
+          (reply.type === "auth.ok" && b.stage === "challenge") ||
+          (reply.type === "auth.resumed" && b.stage === "resume")
+        ) {
           b.stage = "authorized";
           b.expires = now + sessionSeconds(reply.expiresIn) * 1000;
         } else if (reply.type !== "rpc" || b.stage !== "authorized") {

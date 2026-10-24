@@ -109,6 +109,13 @@ export async function checkOverhaul({
           .locator('.toast[data-kind="error"]')
           .filter({ hasText: outputs[0].config.label })
           .waitFor();
+        assert.equal(
+          await p
+            .locator(".activity-bar [data-activity-host]")
+            .getAttribute("data-kind"),
+          "error",
+          "Failed operations release the running-task state",
+        );
         await p.waitForFunction(
           () => !document.querySelector(".crosspoint:disabled"),
         );
@@ -125,6 +132,169 @@ export async function checkOverhaul({
         await fault({ receiver: 0, delay_ms: 0, ignore_switch: false });
         await originalNode.dispose();
       }
+      // Native source selection survives transient API failures and delayed decoder readback.
+      const picker = p.locator(
+        `[data-source-select][data-id="${outputs[0].config.id}"]`,
+      );
+      await picker.focus();
+      await fault({
+        receiver: 0,
+        list_failures: 1,
+        active_failures: 2,
+        switch_failures: 1,
+        lag_reads: 3,
+      });
+      await picker.selectOption(actual);
+      await p.waitForFunction(
+        (source) =>
+          document
+            .querySelector(".receiver-column .output-source")
+            ?.textContent.includes(source) &&
+          !document.querySelector(".crosspoint:disabled"),
+        actual,
+      );
+      assert.equal(
+        await buttonFor(actual).getAttribute("aria-pressed"),
+        "true",
+      );
+      await fault({ receiver: 0, lag_reads: 0 });
+      // A polling tick while the native picker is open cannot change its options or selection.
+      await picker.focus();
+      const pickerNode = await picker.elementHandle();
+      const pickerMarkup = await picker.evaluate((node) => node.outerHTML);
+      await admin.call("route.set", {
+        receiver: outputs[0].config.id,
+        source: targetSource,
+      });
+      await p.waitForTimeout(10500);
+      assert.equal(
+        await picker.evaluate((node) => node.outerHTML),
+        pickerMarkup,
+      );
+      assert(
+        await picker.evaluate(
+          (node, original) => node === original,
+          pickerNode,
+        ),
+      );
+      await picker.selectOption(targetSource);
+      await p.waitForFunction(
+        (source) =>
+          document
+            .querySelector(".receiver-column .output-source")
+            ?.textContent.includes(source) &&
+          !document.querySelector(".crosspoint:disabled"),
+        targetSource,
+      );
+      await pickerNode.dispose();
+      pass(
+        `${kind}: source picker survives failed reads, failed POST, delayed confirmation and open-picker polling`,
+      );
+      // A verified empty decoder route must clear the previous selection and active marks.
+      await fault({ receiver: 0, active: "None" });
+      await p
+        .locator(".other-source")
+        .getByRole("button", { name: "NDI list reset", exact: true })
+        .click();
+      await p.waitForFunction(
+        () =>
+          document
+            .querySelector(".receiver-column .output-source")
+            ?.textContent.includes("No source") &&
+          !document.querySelector(".crosspoint:disabled"),
+      );
+      assert.equal(await picker.inputValue(), "");
+      assert.equal(
+        await p
+          .locator(
+            `[data-control="route"][data-id="${outputs[0].config.id}"][aria-pressed="true"]`,
+          )
+          .count(),
+        0,
+      );
+      await buttonFor(actual).click();
+      await p.waitForFunction(
+        (label) =>
+          document
+            .querySelector(`[aria-label="${label}"]`)
+            ?.getAttribute("aria-pressed") === "true" &&
+          !document.querySelector(".crosspoint:disabled"),
+        `Route ${actual} to ${outputs[0].config.label}`,
+      );
+      // Reset must reach the BirdDog finder cache, then reload active sources.
+      await fault({ receiver: 0, stale_sources: ["Old NDI entry"] });
+      await fault({ receiver: 1, stale_sources: ["Another old entry"] });
+      assert(
+        (await admin.call("sources.list")).sources.some(
+          (s) => s.name === "Old NDI entry",
+        ),
+      );
+      await p
+        .locator(".other-source")
+        .getByRole("button", { name: "NDI list reset", exact: true })
+        .click();
+      await p.waitForFunction(
+        () =>
+          document.querySelector(".activity-bar [data-activity-host]")?.dataset
+            .kind === "done",
+      );
+      await p.waitForFunction(
+        () => !document.querySelector(".crosspoint:disabled"),
+      );
+      assert(
+        !(await admin.call("sources.list")).sources.some(
+          (s) => s.name.includes("old entry") || s.name === "Old NDI entry",
+        ),
+      );
+      assert((await p.locator(".activity-bar").innerText()).includes("(2/2)"));
+      assert.equal(
+        await p
+          .locator(".device-name-button, .source-device-button, .bird-manager")
+          .count(),
+        0,
+      );
+      await p.getByRole("button", { name: "Settings", exact: true }).click();
+      const settings = p.getByRole("dialog", { name: "Settings", exact: true });
+      assert((await settings.boundingBox()).width >= 1000);
+      await settings
+        .getByRole("button", { name: "Network", exact: true })
+        .click();
+      await settings.getByLabel("IPv4 address", { exact: false }).waitFor();
+      assert.equal(
+        await settings
+          .getByRole("button", { name: "BirdDog device manager", exact: true })
+          .count(),
+        0,
+      );
+      await settings
+        .getByRole("button", { name: "Simple Mode", exact: true })
+        .click();
+      await p.screenshot({
+        path: `${root}/docs/screenshots/${kind}-settings-sidebar.png`,
+      });
+      await p.setViewportSize({ width: 390, height: 844 });
+      assert(
+        await settings.evaluate(
+          (dialog) =>
+            dialog.scrollWidth <= dialog.clientWidth &&
+            document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+        "Settings sidebar fits the mobile viewport",
+      );
+      await p.screenshot({
+        path: `${root}/docs/screenshots/${kind}-settings-sidebar-mobile.png`,
+      });
+      await p.setViewportSize({ width: 1440, height: 1000 });
+      await p.keyboard.press("Escape");
+      await settings.waitFor({ state: "detached" });
+      // Keep diagnostics and editor workflows in separate normal-rate sessions.
+      await p.getByRole("button", { name: "Settings", exact: true }).click();
+      await p.getByRole("button", { name: "Disconnect", exact: true }).click();
+      if (kind === "remote")
+        await p.getByLabel("Device name", { exact: true }).fill(name);
+      await p.getByLabel("Password", { exact: true }).fill(password);
+      await p.getByRole("button", { name: "Connect", exact: true }).click();
+      await p.locator(".crosspoint").first().waitFor();
       const eventSwitch = p.getByRole("switch", {
         name: "Event Mode",
         exact: true,
@@ -250,11 +420,33 @@ export async function checkOverhaul({
         .click();
       await p.getByLabel("Source", { exact: true }).waitFor();
       await p.keyboard.press("Escape");
+      const beforeRepair = (await admin.call("receivers.list"))[0].state.source;
+      const beforeReset = (await fault({})).receivers[0].resets;
+      await fault({
+        receiver: 0,
+        stale_sources: ["Retired autofix source"],
+        refresh_failures: 1,
+        forget_route_on_reset: true,
+      });
       await p.getByRole("button", { name: "Auto bugfix", exact: true }).click();
       await p
         .locator('.toast[data-kind="success"]')
         .filter({ hasText: "Auto bugfix complete" })
         .waitFor();
+      assert.equal(
+        (await admin.call("receivers.list"))[0].state.source,
+        beforeRepair,
+      );
+      assert.equal((await fault({})).receivers[0].resets, beforeReset + 1);
+      assert(
+        !(await admin.call("sources.list")).sources.some(
+          (s) => s.name === "Retired autofix source",
+        ),
+      );
+      assert(
+        (await p.locator(".activity-bar").innerText()).includes("(12/12)"),
+      );
+      await fault({ receiver: 0, forget_route_on_reset: false });
       // Partial failures must be reported; the healthy receiver is still checked.
       await fault({ receiver: 1, online: false });
       await p.getByRole("button", { name: "Auto bugfix", exact: true }).click();

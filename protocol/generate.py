@@ -21,7 +21,7 @@ def mutation(properties, required): return obj({**change,**properties},['confirm
 action=obj({'id':s(32),'label':s(),'icon':{'anyOf':[s(32),{'type':'null'}]},'receiver':s(32),'source':s(256),'enabled':boolean,'order':{'type':'integer','minimum':0}})
 actions={'type':'array','minItems':1,'maxItems':10,'items':action}
 password={'type':'string','minLength':4,'maxLength':128}
-operations.update({op:empty for op in ['sources.saved.list','simple.list','event.status','auth.login','auth.logout','auth.session']})
+operations.update({op:empty for op in ['sources.saved.list','simple.list','event.status','auth.login','auth.logout','auth.session','auth.resume.create','auth.detach']})
 operations['sources.saved.add']=mutation({'source':s(256),'display_name':s()},['source'])
 operations['sources.saved.update']=mutation({'id':s(32),'display_name':s()},['id','display_name'])
 operations['sources.saved.remove']=mutation({'id':s(32)},['id'])
@@ -39,8 +39,15 @@ operations['simple.action.execute']=identifier
 for op in ['event.enable','event.disable']:operations[op]=mutation({},[])
 operations['auth.password.change']=mutation({'password':password},['password'])
 operations['receivers.reorder']=obj(order)
-operations['route.repair']=identifier
-operations['simple.repair']=identifier
+repair=obj({'id':s(32),'staged':boolean,'token':s(32)},['id'])
+operations['route.repair']=repair
+operations['simple.repair']=repair
+bird_target={'id':s(32),'ip':{'type':'string','format':'ipv4'},'port':{'type':'integer','minimum':1,'maximum':65535},'confirmed':{'type':'boolean'}}
+for op in ['birddog.info','birddog.sources','birddog.sources.reset','birddog.sources.refresh','birddog.restart','birddog.reboot']:
+ properties={**bird_target}
+ if op in ['birddog.restart','birddog.reboot']: properties['confirmed']={'const':True}
+ operations[op]=obj(properties,['confirmed'] if op in ['birddog.restart','birddog.reboot'] else [])
+ operations[op]['oneOf']=[{'required':['id'],'not':{'anyOf':[{'required':['ip']},{'required':['port']}]}},{'required':['ip'],'not':{'required':['id']}}]
 requests=[obj({'v':{'const':1},'id':s(),'op':{'const':op},'params':params}) for op,params in operations.items()]
 root={'$schema':'http://json-schema.org/draft-07/schema#','$id':'https://drouter.dezso.hu/protocol/v1','title':'DRouter application request','oneOf':requests,'definitions':{'response':obj({'v':{'const':1},'id':s(),'ok':{'type':'boolean'},'result':{},'error':obj({'code':s(),'message':s(512)})},['v','id','ok']),'setup':obj({'name':s(32),'password':{'type':'string','minLength':12,'maxLength':128},'ethernet':eth,'cloud_enabled':{'type':'boolean'},'wifi':{'anyOf':[wifi,{'type':'null'}]},'wifi_profiles':{'type':'array','items':wifi}},['name','password','ethernet','cloud_enabled'])}}
 open('protocol/protocol.schema.json','w').write(json.dumps(root,indent=2)+'\n')

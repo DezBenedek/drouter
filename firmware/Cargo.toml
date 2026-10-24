@@ -26,6 +26,7 @@ hex.workspace = true
 drouter-auth = { path = "../protocol/auth" }
 aes-gcm = "0.10"
 hkdf = "0.12"
+hmac = "0.12"
 srp = "0.6"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 zeroize = "1"

@@ -620,6 +620,7 @@ dependencies = [
  "esp-idf-svc",
  "hex",
  "hkdf",
+ "hmac",
  "log",
  "rand 0.8.8",
  "serde",

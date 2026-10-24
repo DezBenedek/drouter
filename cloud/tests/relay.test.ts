@@ -39,6 +39,32 @@ describe("protocol boundary", () => {
       ),
     ).toBe(false);
   });
+  it("requires a fresh resume proof before allowing application traffic", () => {
+    expect(
+      validClientFrame(
+        { type: "auth.resume.start", ticket: "ab".repeat(16) },
+        "new",
+      ),
+    ).toBe(true);
+    expect(
+      validClientFrame({ type: "auth.resume.start", ticket: "bad" }, "new"),
+    ).toBe(false);
+    expect(
+      validClientFrame(
+        { type: "auth.resume.proof", proof: "ab".repeat(32) },
+        "resume",
+      ),
+    ).toBe(true);
+    expect(
+      validClientFrame(
+        { type: "auth.resume.proof", proof: "ab".repeat(32) },
+        "new",
+      ),
+    ).toBe(false);
+    expect(
+      validClientFrame({ type: "rpc", seq: 1, data: "abcd" }, "resume"),
+    ).toBe(false);
+  });
   it("validates friendly names and requires identity proof", async () => {
     expect(remoteName.test("studio")).toBe(true);
     expect(remoteName.test(`studio--${"a".repeat(32)}`)).toBe(false);

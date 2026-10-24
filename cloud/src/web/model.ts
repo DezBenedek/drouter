@@ -16,7 +16,7 @@ export type Receiver = {
   capabilities: string[];
   model?: string;
 };
-export type Source = { name: string };
+export type Source = { name: string; ip?: string };
 export type Profile = {
   id: string;
   ssid: string;
@@ -38,17 +38,16 @@ export type DeviceClient = {
   onDisconnect: () => void;
 };
 export async function snapshot(client: DeviceClient): Promise<Snapshot> {
-  const [info, health, network, receivers, sources, wifi] =
-    await Promise.all(
-      [
-        "device.info",
-        "device.health",
-        "network.status",
-        "receivers.list",
-        "sources.list",
-        "wifi.list",
-      ].map((op) => client.call(op)),
-    );
+  const [info, health, network, receivers, sources, wifi] = await Promise.all(
+    [
+      "device.info",
+      "device.health",
+      "network.status",
+      "receivers.list",
+      "sources.list",
+      "wifi.list",
+    ].map((op) => client.call(op)),
+  );
   return {
     info,
     health,

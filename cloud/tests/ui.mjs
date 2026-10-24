@@ -16,7 +16,9 @@ export async function checkRemoteAccess({ local, password, root }) {
     await connect();
     for (const enabled of [false, true]) {
       await p.getByRole("button", { name: "Settings", exact: true }).click();
-      await p.getByText("Remote access", { exact: true }).first().click();
+      await p
+        .getByRole("button", { name: "Remote access", exact: true })
+        .click();
       const toggle = p.getByRole("switch", {
         name: "Enable remote access",
         exact: true,
@@ -43,7 +45,7 @@ export async function checkRemoteAccess({ local, password, root }) {
       await connect();
     }
     await p.getByRole("button", { name: "Settings", exact: true }).click();
-    await p.getByText("Remote access", { exact: true }).first().click();
+    await p.getByRole("button", { name: "Remote access", exact: true }).click();
     await p
       .locator("details.settings-card")
       .filter({ has: p.locator("summary", { hasText: "Remote access" }) })
@@ -56,9 +58,11 @@ export async function checkRemoteAccess({ local, password, root }) {
     await p.screenshot({
       path: `${root}/docs/screenshots/local-remote-access-mobile.png`,
     });
-    await p.getByText("Security", { exact: true }).click();
+    await p.getByRole("button", { name: "Security", exact: true }).click();
     await p
-      .getByText("Sessions expire after 24 hours", { exact: true })
+      .getByText("Sessions last 24 hours; settings access lasts 6 hours", {
+        exact: true,
+      })
       .waitFor();
     assert.deepEqual(errors, []);
     await p.getByRole("button", { name: "Disconnect", exact: true }).click();
@@ -261,8 +265,8 @@ export async function checkInterfaces({
 
       const otherRow = p.locator(".route-table tbody tr").last();
       assert.equal(
-        await otherRow.getByRole("rowheader").innerText(),
-        "Other device\nAll NDI sources",
+        await otherRow.getByRole("rowheader").locator("strong").innerText(),
+        "Other device",
       );
       assert.equal(
         await p.getByRole("button", { name: /Add row|Add column/ }).count(),
@@ -306,7 +310,7 @@ export async function checkInterfaces({
       );
       await tabs.nth(1).click();
       await p.getByRole("button", { name: "Settings", exact: true }).click();
-      await p.getByText("Network", { exact: true }).click();
+      await p.getByRole("button", { name: "Network", exact: true }).click();
       await p
         .getByRole("button", {
           name: kind === "local" ? "Add network" : "Add network",

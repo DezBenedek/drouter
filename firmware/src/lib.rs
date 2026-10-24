@@ -8,6 +8,7 @@ pub mod network;
 pub mod platform;
 pub mod presets;
 pub mod remote;
+pub mod repair;
 pub mod routing;
 pub mod storage;
 #[cfg(test)]

@@ -347,7 +347,7 @@ fn authenticated_encryption_replay_expiry_and_revocation() {
     assert_eq!(d.frame(sid, frame, false)["type"], "error");
 }
 #[test]
-fn full_day_sessions_keep_expiry_elevation_replay_and_revocation_guards() {
+fn full_day_sessions_keep_six_hour_settings_access_expiry_replay_and_revocation_guards() {
     let credential = drouter_auth::Credential::new("correct horse battery").unwrap();
     let mut auth = crate::auth::Auth::default();
     let mut login = drouter_auth::Login::new();
@@ -365,7 +365,11 @@ fn full_day_sessions_keep_expiry_elevation_replay_and_revocation_guards() {
     assert_eq!(ok["expiresIn"], 86400);
     let key = hex::decode(login.finish(ok["proof"].as_str().unwrap())).unwrap();
     assert!(auth.elevated(sid, start + 299));
-    assert!(!auth.elevated(sid, start + 300));
+    assert!(auth.elevated(sid, start + 300));
+    assert_eq!(crate::auth::SETTINGS_ACCESS_SECONDS, 21600);
+    assert!(auth.elevated(sid, start + 21599));
+    assert!(!auth.elevated(sid, start + 21600));
+    assert!(auth.role(sid, start + 21600).is_ok());
     let packet = json!({"v":1,"id":"1","op":"device.info","params":{}});
     let frame = json!({"seq":1,"data":hex::encode(crypt(true, &key, sid, 1, packet.to_string().as_bytes(), false).unwrap())});
     assert_eq!(auth.decrypt(sid, &frame, start + 3600).unwrap(), packet);
@@ -1049,4 +1053,637 @@ fn auto_fix_verifies_restoration_and_restricts_profile_targets() {
     );
     assert_eq!(locked["ok"], false);
     assert!(locked["error"].to_string().contains("event_locked"));
+}
+
+struct ManagedDecoder {
+    calls: Arc<Mutex<Vec<String>>>,
+    stale: bool,
+    encoder: bool,
+}
+impl BirdDog for ManagedDecoder {
+    fn request(
+        &mut self,
+        _: &Receiver,
+        method: &str,
+        path: &str,
+        _: Option<Value>,
+    ) -> Result<Value> {
+        self.calls.lock().unwrap().push(format!("{method} {path}"));
+        match path {
+            "/about" => Ok(json!({"FirmwareVersion":"BirdDog managed","HostName":"bird-input"})),
+            "/reset" => {
+                self.stale = false;
+                Ok(json!({}))
+            }
+            "/List" => Ok(if self.stale {
+                json!({"Active":"192.168.1.50:5961","Old":"192.168.1.51"})
+            } else {
+                json!({"Active":"192.168.1.50:5961"})
+            }),
+            "/reboot" | "/restart" | "/refresh" => Ok(json!({})),
+            p if p.starts_with("/connectTo") && !self.encoder => Ok(json!({"sourceName":"Active"})),
+            _ => bail!("Unsupported endpoint"),
+        }
+    }
+}
+#[test]
+fn birddog_reset_clears_device_cache_and_preserves_saved_configuration() {
+    let (_, store) = device();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut d = Device::new(
+        Box::new(store.clone()),
+        Box::new(ManagedDecoder {
+            calls: calls.clone(),
+            stale: true,
+            encoder: false,
+        }),
+        true,
+    )
+    .unwrap();
+    let before = serde_json::to_value(d.config.as_ref().unwrap()).unwrap();
+    let fresh = call(&mut d, "birddog.sources.reset", json!({"id":"one"})).unwrap();
+    assert_eq!(fresh["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(fresh["sources"][0]["ip"], "192.168.1.50");
+    assert_eq!(
+        &calls.lock().unwrap()[..],
+        &["GET /about", "POST /reset", "GET /List"]
+    );
+    assert_eq!(
+        serde_json::to_value(d.config.as_ref().unwrap()).unwrap(),
+        before
+    );
+    assert!(call(&mut d, "birddog.info", json!({"ip":"8.8.8.8"})).is_err());
+    assert!(call(
+        &mut d,
+        "birddog.info",
+        json!({"id":"one","ip":"192.168.1.20"})
+    )
+    .is_err());
+    assert!(call(&mut d, "birddog.reboot", json!({"id":"one"})).is_err());
+    call(
+        &mut d,
+        "birddog.restart",
+        json!({"id":"one","confirmed":true}),
+    )
+    .unwrap();
+    assert!(calls.lock().unwrap().iter().any(|c| c == "POST /restart"));
+}
+#[test]
+fn birddog_encoder_management_does_not_require_decoder_readback_and_restricts_roles() {
+    let (_, store) = device();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut d = Device::new(
+        Box::new(store),
+        Box::new(ManagedDecoder {
+            calls: calls.clone(),
+            stale: false,
+            encoder: true,
+        }),
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        call(
+            &mut d,
+            "birddog.info",
+            json!({"ip":"192.168.1.50","port":8080})
+        )
+        .unwrap()["about"]["HostName"],
+        "bird-input"
+    );
+    assert!(!calls
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c.contains("connectTo")));
+    confirmed(&mut d,"simple.create",json!({"name":"Restricted","password":"restricted-manager","actions":[simple_action("fixed","Active")]})).unwrap();
+    let key = login_role(&mut d, "restricted-bird", "restricted-manager");
+    for (i, op) in ["birddog.info", "birddog.sources.reset", "birddog.reboot"]
+        .iter()
+        .enumerate()
+    {
+        assert_eq!(
+            rpc_role(
+                &mut d,
+                "restricted-bird",
+                &key,
+                i as u64 + 1,
+                op,
+                json!({"id":"one","confirmed":true})
+            )["ok"],
+            false
+        );
+    }
+}
+
+struct RecoveryState {
+    active: String,
+    cached: Vec<String>,
+    failures: std::collections::BTreeMap<String, usize>,
+    calls: Vec<String>,
+    lag: usize,
+    pending: Option<(String, usize)>,
+    drop_route_on_reset: bool,
+    reset_supported: bool,
+    ignore_switches: usize,
+    post_reply_lost: bool,
+    missing_source: bool,
+}
+impl Default for RecoveryState {
+    fn default() -> Self {
+        Self {
+            active: "Camera A".into(),
+            cached: vec!["Camera A".into(), "Camera B".into()],
+            failures: Default::default(),
+            calls: vec![],
+            lag: 0,
+            pending: None,
+            drop_route_on_reset: false,
+            reset_supported: true,
+            ignore_switches: 0,
+            post_reply_lost: false,
+            missing_source: false,
+        }
+    }
+}
+struct RecoveryDecoder(Arc<Mutex<RecoveryState>>);
+impl BirdDog for RecoveryDecoder {
+    fn request(
+        &mut self,
+        _: &Receiver,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let mut s = self.0.lock().unwrap();
+        let endpoint = path.split('?').next().unwrap();
+        let key = format!("{method} {endpoint}");
+        s.calls.push(key.clone());
+        if let Some(remaining) = s.failures.get_mut(&key) {
+            if *remaining > 0 {
+                *remaining -= 1;
+                bail!("Temporary HTTP failure");
+            }
+        }
+        match (method, endpoint) {
+            ("GET", "/connectTo") => {
+                if let Some((source, remaining)) = s.pending.take() {
+                    if remaining == 0 {
+                        s.active = source;
+                    } else {
+                        s.pending = Some((source, remaining - 1));
+                    }
+                }
+                Ok(json!({"sourceName":s.active}))
+            }
+            ("POST", "/connectTo") => {
+                if s.ignore_switches > 0 {
+                    s.ignore_switches -= 1;
+                } else {
+                    let source = body.unwrap()["sourceName"].as_str().unwrap().to_string();
+                    if s.lag > 0 {
+                        let lag = s.lag;
+                        s.pending = Some((source, lag));
+                    } else {
+                        s.active = source;
+                    }
+                }
+                if s.post_reply_lost {
+                    bail!("POST response timed out after apply");
+                }
+                Ok(json!({}))
+            }
+            ("POST", "/refresh" | "/reset") => {
+                if endpoint == "/reset" {
+                    if !s.reset_supported {
+                        bail!("BirdDog HTTP 404");
+                    }
+                    if s.drop_route_on_reset {
+                        s.active = "Camera B".into();
+                    }
+                }
+                s.cached = if s.missing_source {
+                    vec!["Camera B".into()]
+                } else {
+                    vec!["Camera A".into(), "Camera B".into()]
+                };
+                Ok(json!({}))
+            }
+            ("GET", "/List") => Ok(json!(s
+                .cached
+                .iter()
+                .map(|n| (n.clone(), "10.0.0.1"))
+                .collect::<std::collections::BTreeMap<_, _>>())),
+            _ => bail!("Unsupported endpoint"),
+        }
+    }
+}
+fn recovery_device(state: RecoveryState) -> (Device, Arc<Mutex<RecoveryState>>, Store) {
+    let (_, store) = device();
+    let state = Arc::new(Mutex::new(state));
+    let d = Device::new(
+        Box::new(store.clone()),
+        Box::new(RecoveryDecoder(state.clone())),
+        true,
+    )
+    .unwrap();
+    (d, state, store)
+}
+#[test]
+fn routing_recovers_discovery_transient_readback_delayed_apply_and_lost_post_reply() {
+    let (mut d, state, _) = recovery_device(RecoveryState {
+        cached: vec!["Camera A".into()],
+        lag: 4,
+        failures: [("GET /connectTo".into(), 2)].into(),
+        post_reply_lost: true,
+        ..Default::default()
+    });
+    let result = call(
+        &mut d,
+        "route.set",
+        json!({"receiver":"one","source":"Camera B"}),
+    )
+    .unwrap();
+    assert_eq!(result["source"], "Camera B");
+    let s = state.lock().unwrap();
+    assert!(s.calls.contains(&"POST /refresh".into()));
+    assert_eq!(
+        s.calls.iter().filter(|p| *p == "POST /connectTo").count(),
+        1,
+        "A lost reply must not resend a command already confirmed by readback"
+    );
+}
+#[test]
+fn routing_retries_a_rejected_switch_and_still_verifies_the_actual_source() {
+    let (mut d, state, _) = recovery_device(RecoveryState {
+        ignore_switches: 1,
+        ..Default::default()
+    });
+    let result = call(
+        &mut d,
+        "route.set",
+        json!({"receiver":"one","source":"Camera B"}),
+    )
+    .unwrap();
+    assert_eq!(result["source"], "Camera B");
+    assert_eq!(
+        state
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|p| *p == "POST /connectTo")
+            .count(),
+        2
+    );
+}
+#[test]
+fn staged_repair_recovers_multiple_faults_reports_progress_and_preserves_configuration() {
+    let (mut d, state, store) = recovery_device(RecoveryState {
+        cached: vec!["Retired source".into()],
+        drop_route_on_reset: true,
+        failures: [("GET /connectTo".into(), 2), ("POST /refresh".into(), 1)].into(),
+        ..Default::default()
+    });
+    let before = serde_json::to_value(d.config.clone()).unwrap();
+    let writes = store.0.lock().unwrap().writes;
+    let mut result = call(&mut d, "route.repair", json!({"id":"one","staged":true})).unwrap();
+    assert_eq!(result["completed"], 0);
+    for phase in 1..=6 {
+        result = call(
+            &mut d,
+            "route.repair",
+            json!({"id":"one","token":result["token"]}),
+        )
+        .unwrap();
+        assert_eq!(result["completed"], phase);
+        assert_eq!(result["done"], phase == 6);
+    }
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["reset"], true);
+    assert_eq!(result["source"], "Camera A");
+    assert!(result["notes"].to_string().contains("stale NDI"));
+    assert!(result["notes"].to_string().contains("temporary receiver"));
+    assert_eq!(state.lock().unwrap().active, "Camera A");
+    assert_eq!(serde_json::to_value(d.config.clone()).unwrap(), before);
+    assert_eq!(store.0.lock().unwrap().writes, writes);
+    assert!(
+        call(
+            &mut d,
+            "route.repair",
+            json!({"id":"one","token":result["token"]})
+        )
+        .is_err(),
+        "Completed jobs cannot be replayed"
+    );
+}
+#[test]
+fn repair_handles_unsupported_reset_but_never_claims_a_missing_source_is_restored() {
+    let (mut d, _, _) = recovery_device(RecoveryState {
+        reset_supported: false,
+        ..Default::default()
+    });
+    let result = call(&mut d, "route.repair", json!({"id":"one"})).unwrap();
+    assert_eq!(result["verified"], true);
+    assert_eq!(result["reset"], false);
+    assert!(result["notes"].to_string().contains("404"));
+    let (mut d, state, _) = recovery_device(RecoveryState {
+        missing_source: true,
+        ..Default::default()
+    });
+    assert!(call(&mut d, "route.repair", json!({"id":"one"})).is_err());
+    assert!(
+        !state
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .any(|p| p == "POST /connectTo"),
+        "Repair never picks an arbitrary substitute source"
+    );
+}
+#[test]
+fn staged_repair_is_session_bound_and_cannot_overwrite_a_newer_route() {
+    let (mut d, _, _) = recovery_device(Default::default());
+    let key = login_role(&mut d, "repair-admin", "correct horse battery");
+    let other = login_role(&mut d, "other-admin", "correct horse battery");
+    let start = rpc_role(
+        &mut d,
+        "repair-admin",
+        &key,
+        1,
+        "route.repair",
+        json!({"id":"one","staged":true}),
+    );
+    let token = start["result"]["token"].clone();
+    assert!(token.is_string());
+    let foreign = rpc_role(
+        &mut d,
+        "other-admin",
+        &other,
+        1,
+        "route.repair",
+        json!({"id":"one","token":token}),
+    );
+    assert_eq!(foreign["ok"], false);
+    assert!(foreign["error"].to_string().contains("forbidden"));
+    assert_eq!(
+        rpc_role(
+            &mut d,
+            "repair-admin",
+            &key,
+            2,
+            "route.repair",
+            json!({"id":"one","token":token})
+        )["ok"],
+        true
+    );
+    call(
+        &mut d,
+        "route.set",
+        json!({"receiver":"one","source":"Camera B"}),
+    )
+    .unwrap();
+    let cancelled = rpc_role(
+        &mut d,
+        "repair-admin",
+        &key,
+        3,
+        "route.repair",
+        json!({"id":"one","token":token}),
+    );
+    assert_eq!(cancelled["ok"], false);
+    assert!(cancelled["error"].to_string().contains("cancelled"));
+    assert_eq!(
+        call(&mut d, "route.get", json!({})).unwrap()[0]["source"],
+        "Camera B"
+    );
+}
+#[test]
+fn empty_routes_are_normalized_and_repair_never_selects_a_default_source() {
+    let (mut d, state, _) = recovery_device(RecoveryState {
+        active: "None".into(),
+        ..Default::default()
+    });
+    let result = call(&mut d, "route.repair", json!({"id":"one"})).unwrap();
+    assert_eq!(result["source"], "");
+    assert_eq!(result["restored"], false);
+    assert!(!state
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .any(|p| p == "POST /connectTo"));
+}
+
+#[test]
+fn settings_remain_available_after_five_minutes_and_require_login_only_after_six_hours() {
+    let (mut d, _) = device();
+    let key = login_role(&mut d, "long-settings", "correct horse battery");
+    // Move the device clock instead of making a test wait six hours.
+    d.boot -= std::time::Duration::from_secs(3600);
+    let revision = d.config.as_ref().unwrap().revision;
+    let allowed = rpc_role(
+        &mut d,
+        "long-settings",
+        &key,
+        1,
+        "event.enable",
+        json!({"confirmed":true,"expected_revision":revision}),
+    );
+    assert_eq!(
+        allowed["ok"], true,
+        "Settings changes still work after one hour"
+    );
+    d.boot -= std::time::Duration::from_secs(5 * 3600 + 1);
+    let revision = d.config.as_ref().unwrap().revision;
+    let expired = rpc_role(
+        &mut d,
+        "long-settings",
+        &key,
+        2,
+        "event.disable",
+        json!({"confirmed":true,"expected_revision":revision}),
+    );
+    assert_eq!(expired["ok"], false);
+    assert!(expired["error"]
+        .to_string()
+        .contains("Reconnect to authorize"));
+    assert!(d.config.as_ref().unwrap().event_mode);
+    let read = rpc_role(&mut d, "long-settings", &key, 3, "device.info", json!({}));
+    assert_eq!(
+        read["ok"], true,
+        "The ordinary session remains valid after settings access expires"
+    );
+    d.auth.revoke();
+    assert!(
+        d.auth.role("long-settings", d.now()).is_err(),
+        "Revocation still applies immediately"
+    );
+}
+
+#[test]
+fn resume_rekeys_sessions_rotates_tickets_and_preserves_original_six_hour_deadline() {
+    use crate::auth::{resume_key, resume_proof};
+    let (mut d, _) = device();
+    let original = "reload-original";
+    let key = login_role(&mut d, original, "correct horse battery");
+    let issued = rpc_role(&mut d, original, &key, 1, "auth.resume.create", json!({}));
+    assert_eq!(issued["ok"], true);
+    let ticket = issued["result"]["ticket"].as_str().unwrap();
+    let secret = hex::decode(issued["result"]["secret"].as_str().unwrap()).unwrap();
+    let deadline = issued["result"]["expiresIn"].as_u64().unwrap() + d.now();
+    d.auth.remove(original); // Relay leave / local detach must preserve the resume credential.
+    let now = d.now() + 3600;
+    let sid = "reload-new";
+    let challenge = d.auth.resume_start(sid, ticket, now).unwrap();
+    let nonce = challenge["nonce"].as_str().unwrap();
+    assert_eq!(
+        challenge["proof"],
+        resume_proof(&secret, "server", sid, ticket, nonce).unwrap()
+    );
+    let proof = resume_proof(&secret, "client", sid, ticket, nonce).unwrap();
+    let resumed = d.auth.resume_prove(sid, &proof, now).unwrap();
+    assert_eq!(resumed["type"], "auth.resumed");
+    assert_eq!(
+        resumed["proof"],
+        resume_proof(&secret, "accepted", sid, ticket, nonce).unwrap()
+    );
+    assert!(d.auth.elevated(sid, deadline - 2));
+    assert!(!d.auth.elevated(sid, deadline));
+    let fresh = d.auth.issue_resume(sid, now).unwrap();
+    assert_ne!(fresh["ticket"], ticket);
+    assert!(
+        fresh["expiresIn"]
+            .as_u64()
+            .unwrap()
+            .abs_diff(deadline - now)
+            <= 1
+    );
+    assert!(d.auth.resume_start("replay", ticket, now).is_err());
+    let new_key = resume_key(&secret, sid, ticket, nonce).unwrap();
+    assert_ne!(new_key, key);
+    let packet = json!({"v":1,"id":"1","op":"device.info","params":{}});
+    let frame = json!({"seq":1,"data":hex::encode(crypt(true,&new_key,sid,1,packet.to_string().as_bytes(),false).unwrap())});
+    assert_eq!(d.auth.decrypt(sid, &frame, now).unwrap(), packet);
+    assert!(d.auth.decrypt(sid, &frame, now).is_err());
+    d.auth.logout(sid);
+    assert!(d
+        .auth
+        .resume_start("after-logout", fresh["ticket"].as_str().unwrap(), now)
+        .is_err());
+}
+
+#[test]
+fn resume_rejects_wrong_proof_replays_expired_challenges_and_revoked_credentials() {
+    use crate::auth::resume_proof;
+    let (mut d, _) = device();
+    let key = login_role(&mut d, "resume-user", "correct horse battery");
+    let issued = rpc_role(
+        &mut d,
+        "resume-user",
+        &key,
+        1,
+        "auth.resume.create",
+        json!({}),
+    )["result"]
+        .clone();
+    let ticket = issued["ticket"].as_str().unwrap();
+    let secret = hex::decode(issued["secret"].as_str().unwrap()).unwrap();
+    let challenge = d.auth.resume_start("wrong-proof", ticket, 100).unwrap();
+    let nonce = challenge["nonce"].as_str().unwrap();
+    // Server proof is never valid as a client proof, nor on a different session.
+    assert!(d
+        .auth
+        .resume_prove("wrong-proof", challenge["proof"].as_str().unwrap(), 100)
+        .is_err());
+    let challenge = d.auth.resume_start("expired", ticket, 200).unwrap();
+    let proof = resume_proof(
+        &secret,
+        "client",
+        "expired",
+        ticket,
+        challenge["nonce"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert!(d.auth.resume_prove("expired", &proof, 231).is_err());
+    d.auth.resume_start("other-session", ticket, 300).unwrap();
+    let wrong = resume_proof(&secret, "client", "wrong-proof", ticket, nonce).unwrap();
+    assert!(d.auth.resume_prove("other-session", &wrong, 300).is_err());
+    assert!(
+        d.auth.role("resume-user", 300).is_ok(),
+        "A failed resume cannot destroy the original authenticated session"
+    );
+    let good = d.auth.resume_start("good", ticket, 400).unwrap();
+    let proof = resume_proof(
+        &secret,
+        "client",
+        "good",
+        ticket,
+        good["nonce"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert!(d.auth.resume_prove("good", &proof, 400).is_ok());
+    let rotated = d.auth.issue_resume("good", 400).unwrap();
+    d.auth.revoke();
+    assert!(d
+        .auth
+        .resume_start("revoked", rotated["ticket"].as_str().unwrap(), 401)
+        .is_err());
+    assert!(d.auth.resume_prove("good", &proof, 401).is_err());
+}
+
+#[test]
+fn profile_resume_credentials_are_revoked_by_password_change_disable_delete_and_restart() {
+    for change in ["password", "disable", "delete", "restart"] {
+        let (mut d, store) = device();
+        confirmed(&mut d,"simple.create",json!({"name":"Reload profile","password":"resume-simple","actions":[simple_action("one","Camera A")]})).unwrap();
+        let id = d.config.as_ref().unwrap().simple_profiles[0].id.clone();
+        let key = login_role(&mut d, "simple-resume", "resume-simple");
+        let issued = rpc_role(
+            &mut d,
+            "simple-resume",
+            &key,
+            1,
+            "auth.resume.create",
+            json!({}),
+        )["result"]
+            .clone();
+        assert!(issued["ticket"].is_string());
+        d.auth.remove("simple-resume");
+        match change {
+            "password" => {
+                confirmed(
+                    &mut d,
+                    "simple.update",
+                    json!({"id":id,"password":"replacement-resume"}),
+                )
+                .unwrap();
+            }
+            "disable" => {
+                confirmed(&mut d, "simple.update", json!({"id":id,"enabled":false})).unwrap();
+            }
+            "delete" => {
+                confirmed(&mut d, "simple.delete", json!({"id":id})).unwrap();
+            }
+            _ => {
+                d = Device::new(
+                    Box::new(store),
+                    Box::new(Decoder {
+                        active: "Camera A".into(),
+                        online: true,
+                        ignore: false,
+                    }),
+                    true,
+                )
+                .unwrap();
+            }
+        }
+        assert!(
+            d.auth
+                .resume_start("not-allowed", issued["ticket"].as_str().unwrap(), d.now())
+                .is_err(),
+            "{change} must invalidate stored resume credentials"
+        );
+    }
 }

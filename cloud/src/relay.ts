@@ -26,9 +26,18 @@ export function parseFrame(message: string | ArrayBuffer): Frame {
 export function validClientFrame(frame: Frame, stage: string): boolean {
   if (stage === "new")
     return (
-      frame.type === "auth.start" &&
-      typeof frame.a === "string" &&
-      /^[a-f0-9]{2,512}$/i.test(frame.a)
+      (frame.type === "auth.resume.start" &&
+        typeof frame.ticket === "string" &&
+        /^[a-f0-9]{32}$/.test(frame.ticket)) ||
+      (frame.type === "auth.start" &&
+        typeof frame.a === "string" &&
+        /^[a-f0-9]{2,512}$/i.test(frame.a))
+    );
+  if (stage === "resume")
+    return (
+      frame.type === "auth.resume.proof" &&
+      typeof frame.proof === "string" &&
+      /^[a-f0-9]{64}$/.test(frame.proof)
     );
   if (stage === "challenge" || stage === "fake")
     return (

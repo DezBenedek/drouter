@@ -333,11 +333,52 @@ async fn faults(State(s): State<Shared>, headers: HeaderMap, Json(v): Json<Value
                     .map(|s| s.as_str().unwrap().to_string())
                     .collect();
             }
+            if let Some(stale) = v["stale_sources"].as_array() {
+                if stale.len() > 64
+                    || stale
+                        .iter()
+                        .any(|v| v.as_str().is_none_or(|s| s.is_empty() || s.len() > 256))
+                {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                state.stale_sources = stale
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_string())
+                    .collect();
+            }
+            if let Some(active) = v["active"].as_str() {
+                if active.len() > 256 {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                state.active = active.into();
+                state.pending_source = None;
+            }
             if let Some(online) = v["online"].as_bool() {
                 state.online = online;
             }
             if let Some(ignore) = v["ignore_switch"].as_bool() {
                 state.ignore_switch = ignore;
+            }
+            for key in [
+                "active_failures",
+                "list_failures",
+                "refresh_failures",
+                "switch_failures",
+                "lag_reads",
+            ] {
+                if let Some(value) = v[key].as_u64() {
+                    let value = value.min(20) as u32;
+                    match key {
+                        "active_failures" => state.active_failures = value,
+                        "list_failures" => state.list_failures = value,
+                        "refresh_failures" => state.refresh_failures = value,
+                        "switch_failures" => state.switch_failures = value,
+                        _ => state.lag_reads = value,
+                    }
+                }
+            }
+            if let Some(value) = v["forget_route_on_reset"].as_bool() {
+                state.forget_route_on_reset = value;
             }
             if let Some(delay) = v["delay_ms"].as_u64() {
                 state.delay_ms = delay.min(10000);

@@ -157,6 +157,7 @@ export const dictionaries = {
     "Remove button": "Remove button",
     "Use 1–10 action buttons": "Use 1–10 action buttons",
     "No Simple Modes configured": "No Simple Modes configured",
+    "Its buttons are deleted too.": "Its buttons are deleted too.",
     "Each profile has its own password and 1–10 fixed action buttons.":
       "Each profile has its own password and 1–10 fixed action buttons.",
     "Password will be changed": "Password will be changed",
@@ -444,8 +445,8 @@ export const dictionaries = {
     "Save preset": "Save preset",
     "Saved passwords are never returned to this interface. Drag rows to reorder on desktop, or use the arrow controls.":
       "Saved passwords are never returned to this interface. Drag rows to reorder on desktop, or use the arrow controls.",
-    "Sensitive changes require a connection authenticated within the last five minutes. Identity recovery and factory reset are available from the local interface.":
-      "Sensitive changes require a connection authenticated within the last five minutes. Identity recovery and factory reset are available from the local interface.",
+    "Sensitive changes require a connection authenticated within the last six hours. Identity recovery and factory reset are available from the local interface.":
+      "Sensitive changes require a connection authenticated within the last six hours. Identity recovery and factory reset are available from the local interface.",
     "Sessions expire automatically after 24 hours":
       "Sessions expire automatically after 24 hours",
     Status: "Status",
@@ -566,6 +567,39 @@ export const dictionaries = {
     "DRouter · Local": "DRouter · Local",
   },
   hu: {
+    "Restoring session…": "Munkamenet visszaállítása…",
+    "Sessions last 24 hours; settings access lasts 6 hours":
+      "A munkamenet 24 órás; a beállításokhoz 6 óráig nem kell újra bejelentkezni",
+    "Starting receiver diagnostics": "Eszközdiagnosztika indítása",
+    "Checking receiver connection and current route":
+      "Elérés és jelenlegi kapcsolás ellenőrzése",
+    "Checking the cached NDI source list": "Tárolt NDI-forráslista ellenőrzése",
+    "Refreshing NDI discovery": "NDI-forráskeresés frissítése",
+    "Clearing stale NDI entries and rediscovering active sources":
+      "Beragadt NDI-bejegyzések törlése és aktív források újrakeresése",
+    "Restoring the captured route with readback retries":
+      "Eredeti kapcsolás visszaállítása ismételt visszaellenőrzéssel",
+    "Verifying the final route": "Végső kapcsolás ellenőrzése",
+    "Retry switch": "Kapcsolás újrapróbálása",
+    "Recovered a temporary receiver communication failure":
+      "Átmeneti eszközkommunikációs hiba helyreállítva",
+    "No active route: discovery will be repaired without choosing a source":
+      "Nincs aktív kapcsolás: a forráskeresés javítása forrásválasztás nélkül fut",
+    "The current source was missing from the receiver discovery cache":
+      "A jelenlegi forrás hiányzott az eszköz NDI-listájából",
+    "The original source is still missing; checking discovery again before restoration":
+      "Az eredeti forrás még hiányzik; újabb keresés a visszaállítás előtt",
+    "Auto bugfix is already running for this receiver":
+      "Ezen az eszközön már fut az Autobugfix",
+    "Receiver configuration changed. Run Auto bugfix again.":
+      "Az eszköz beállítása megváltozott. Indítsd újra az Autobugfixet.",
+    "Repair expired or was cancelled by a newer route. Run Auto bugfix again.":
+      "A javítás lejárt vagy újabb kapcsolás megszakította. Indítsd újra az Autobugfixet.",
+    "Route verified, but NDI discovery could not be repaired":
+      "A kapcsolás ellenőrzött, de az NDI-forráskeresést nem sikerült helyreállítani",
+    "Source is unavailable on this receiver after discovery refresh":
+      "A forrás újrakeresés után sem érhető el ezen az eszközön",
+
     "Name belongs to another device. Choose another name or restore its identity.":
       "Ez a név másik eszközhöz tartozik. Válasszon másik nevet, vagy állítsa vissza az eredeti eszközazonosságot.",
     "Registration service unavailable. Retrying automatically.":
@@ -724,6 +758,7 @@ export const dictionaries = {
     "Remove button": "Gomb eltávolítása",
     "Use 1–10 action buttons": "Adjon meg 1–10 műveletgombot",
     "No Simple Modes configured": "Még nincs beállított egyszerűsített mód",
+    "Its buttons are deleted too.": "A gombjai is törlődnek.",
     "Each profile has its own password and 1–10 fixed action buttons.":
       "Minden profilhoz saját jelszó és 1–10 rögzített műveletgomb tartozik.",
     "Password will be changed": "A jelszó megváltozik",
@@ -1011,8 +1046,8 @@ export const dictionaries = {
     "Save preset": "Előbeállítás mentése",
     "Saved passwords are never returned to this interface. Drag rows to reorder on desktop, or use the arrow controls.":
       "A mentett jelszavak soha nem kerülnek vissza erre a felületre. A sorrendet asztali gépen húzással, vagy a nyilakkal módosíthatja.",
-    "Sensitive changes require a connection authenticated within the last five minutes. Identity recovery and factory reset are available from the local interface.":
-      "Az érzékeny módosításokhoz az elmúlt öt percben hitelesített kapcsolat szükséges. Az eszközazonosító helyreállítása és a gyári visszaállítás a helyi felületen érhető el.",
+    "Sensitive changes require a connection authenticated within the last six hours. Identity recovery and factory reset are available from the local interface.":
+      "Az érzékeny módosításokhoz az elmúlt hat órában hitelesített kapcsolat szükséges. Az eszközazonosító helyreállítása és a gyári visszaállítás a helyi felületen érhető el.",
     "Sessions expire automatically after 24 hours":
       "A munkamenetek 24 óra után automatikusan lejárnak",
     Status: "Állapot",
@@ -1148,6 +1183,55 @@ try {
 } catch {}
 if (!["en", "hu"].includes(preferred)) preferred = "en";
 Object.assign(dictionaries.hu, {
+  "Restart command accepted": "Újraindítási parancs elfogadva",
+  "Reboot requested": "Újraindítás kérve",
+  "Video restart requested": "Videó-újraindítás kérve",
+  "Reading device list": "Eszközlista lekérése",
+  "Reading configuration": "Beállítások lekérése",
+  "Configuration loaded": "Beállítások betöltve",
+  "Saving changes": "Változtatások mentése",
+  "Save device": "Eszköz mentése",
+  Ready: "Készenlét",
+  Completed: "Befejezve",
+  "Activity log": "Napló",
+  "Settings sections": "Beállítási kategóriák",
+  "BirdDog device manager": "BirdDog eszközkezelő",
+  "NDI list reset": "NDI-lista reset",
+  "Clearing cached sources and discovering active NDI sources":
+    "Lista ürítése és az aktív NDI-források lekérése",
+  "Active NDI source lists loaded": "Az aktív NDI-források listája betöltve",
+  "Refreshing sources, restoring and verifying the route":
+    "Forráslista frissítése, kapcsolat újraküldése és ellenőrzése",
+  "BirdDog sections": "BirdDog-kezelés",
+  Overview: "Áttekintés",
+  "NDI sources": "NDI-források",
+  "Device connection": "Kapcsolat és név",
+  Maintenance: "Karbantartás",
+  "BirdDog device": "BirdDog eszköz",
+  "Connect by IP address": "Kapcsolódás IP-címmel",
+  "Reading BirdDog device…": "BirdDog-adatok lekérése…",
+  "Registered outputs and BirdDog NDI inputs can be managed here.":
+    "Itt a regisztrált kimenetek és a BirdDog NDI-bemenetek is kezelhetők.",
+  "DRouter output": "DRouter-kimenet",
+  Hostname: "Gépnév",
+  "Serial number": "Sorozatszám",
+  "Reset removes old BirdDog entries and requests only active sources.":
+    "A reset törli a BirdDog régi forráslistáját, majd csak az aktív forrásokat kéri le.",
+  "Load NDI sources": "NDI-források lekérése",
+  "Restart video subsystem": "Videó-alrendszer újraindítása",
+  "Temporarily interrupts this device’s video.":
+    "Ideiglenesen megszakítja az eszköz videóját.",
+  "Restart video": "Videó újraindítása",
+  "Reboot BirdDog": "BirdDog újraindítása",
+  "The device will temporarily disconnect.":
+    "Az eszköz átmenetileg lekapcsolódik.",
+  "Reboot device": "Eszköz újraindítása",
+  "Reboot BirdDog?": "Újraindítod a BirdDog eszközt?",
+  "Restart video subsystem?": "Újraindítod a videó-alrendszert?",
+  "Reading active NDI sources": "Aktív NDI-források lekérése",
+  "Auto bugfix": "Autobugfix",
+});
+Object.assign(dictionaries.hu, {
   "+ Add button": "+ Gomb hozzáadása",
   "NDI source": "NDI-forrás",
   "Add source": "Forrás hozzáadása",
@@ -1211,6 +1295,14 @@ export function t(key, values = {}) {
     dictionaries[preferred][translatedKey] ||
     dictionaries.en[translatedKey] ||
     key;
+  if (preferred === "hu" && text === key)
+    for (const [pattern, replacement] of patterns) {
+      const match = key.match(pattern);
+      if (match) {
+        text = replacement(...match.slice(1));
+        break;
+      }
+    }
   for (const [name, value] of Object.entries(values))
     text = text.replaceAll(`{${name}}`, String(value));
   return text;
@@ -1317,6 +1409,30 @@ export function installLocalization() {
   update();
 }
 const patterns = [
+  [
+    /^Removed (\d+) stale NDI discovery entries$/,
+    (count) => `${count} elavult NDI-bejegyzés eltávolítva`,
+  ],
+  [
+    /^Receiver unreachable after 3 checks\. Check power, Ethernet, IP address and API port\. (.*)$/,
+    (detail) =>
+      `Az eszköz 3 próbálkozás után sem érhető el. Ellenőrizd a tápot, Ethernet-kapcsolatot, IP-címet és API-portot. ${detail}`,
+  ],
+  [
+    /^Source-list read failed; attempting discovery recovery: (.*)$/,
+    (detail) =>
+      `A forráslista olvasása sikertelen; a keresés helyreállítása következik: ${detail}`,
+  ],
+  [
+    /^Discovery refresh failed: (.*)$/,
+    (detail) => `A forráskeresés frissítése sikertelen: ${detail}`,
+  ],
+  [
+    /^NDI reset unavailable or failed: (.*)$/,
+    (detail) =>
+      `Az NDI-lista visszaállítása nem érhető el vagy sikertelen: ${detail}`,
+  ],
+
   [
     /^(.+) is configured. You can change these settings at any time.$/,
     (name) =>

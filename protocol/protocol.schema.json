@@ -1307,6 +1307,64 @@
           "maxLength": 64
         },
         "op": {
+          "const": "auth.resume.create"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "auth.detach"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
           "const": "sources.saved.add"
         },
         "params": {
@@ -2359,6 +2417,14 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 32
+            },
+            "staged": {
+              "type": "boolean"
+            },
+            "token": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
             }
           },
           "required": [
@@ -2396,12 +2462,492 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 32
+            },
+            "staged": {
+              "type": "boolean"
+            },
+            "token": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
             }
           },
           "required": [
             "id"
           ],
           "additionalProperties": false
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "birddog.info"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "confirmed": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "ip"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "not": {
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "birddog.sources"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "confirmed": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "ip"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "not": {
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "birddog.sources.reset"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "confirmed": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "ip"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "not": {
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "birddog.sources.refresh"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "confirmed": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "ip"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "not": {
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "birddog.restart"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "confirmed": {
+              "const": true
+            }
+          },
+          "required": [
+            "confirmed"
+          ],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "ip"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "not": {
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "op": {
+          "const": "birddog.reboot"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            "ip": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "confirmed": {
+              "const": true
+            }
+          },
+          "required": [
+            "confirmed"
+          ],
+          "additionalProperties": false,
+          "oneOf": [
+            {
+              "required": [
+                "id"
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "ip"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "port"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "required": [
+                "ip"
+              ],
+              "not": {
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          ]
         }
       },
       "required": [

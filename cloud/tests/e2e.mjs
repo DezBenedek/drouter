@@ -10,6 +10,7 @@ import WebSocket from "ws";
 import init from "../../firmware/web/shared/auth.js";
 import { Client } from "../../firmware/web/shared/client.js";
 import { checkOverhaul } from "./overhaul.mjs";
+import { checkSessionReload } from "./session-reload.mjs";
 import { modification3 } from "./modification3.mjs";
 import { checkInterfaces, checkSetup, checkRemoteAccess } from "./ui.mjs";
 const root = path.resolve(
@@ -371,292 +372,307 @@ try {
   pass(
     "real Chromium local and React remote UIs route receivers; mobile layout verified",
   );
-  await checkOverhaul({
+  await checkSessionReload({
     local,
     cloud,
     name,
     password,
-    root,
     admin: localClient,
     fault,
     pass,
   });
-  await modification3({
-    admin: localClient,
-    local,
-    cloud,
-    name,
-    password,
-    receivers: discovered,
-    fault,
-    pass,
-    root,
-  });
-  await localClient.call("route.set", { receiver, source: sourceA });
-  const socket = await rawWs(
-    `ws://127.0.0.1:${cloudPort}/relay/${name}/browser`,
-  );
-  await socket.next();
-  socket.send({ type: "rpc", seq: 1, data: "abcd" });
-  assert.equal((await socket.next()).type, "error");
-  socket.ws.close();
-  pass("unauthorized WebSocket cannot issue commands");
-  const keys = generateKeyPairSync("ed25519"),
-    publicKey = keys.publicKey
-      .export({ format: "der", type: "spki" })
-      .subarray(-32),
-    deviceId = createHash("sha256").update(publicKey).digest("hex"),
-    ownedName = "registry-test-device";
-  let lastProof;
-  async function registration(
-    socket,
-    requestedName = ownedName,
-    identity = keys,
-    pub = publicKey,
-  ) {
-    const challenge = await socket.next();
-    const id = createHash("sha256").update(pub).digest("hex");
-    lastProof = {
-      type: "register",
-      deviceId: id,
-      name: requestedName,
-      publicKey: pub.toString("hex"),
-      signature: sign(
-        null,
-        Buffer.from(
-          `drouter-register-v2\n${id}\n${requestedName}\n${challenge.nonce}`,
-        ),
-        identity.privateKey,
-      ).toString("hex"),
-    };
-    socket.send(lastProof);
-    return socket.next();
-  }
-  const deviceUrl = (id) => `ws://127.0.0.1:${cloudPort}/relay/${id}/device`;
-  const owner = await rawWs(deviceUrl(deviceId));
-  assert.equal((await registration(owner)).type, "registered");
-  const proof = lastProof;
-  const duplicate = await rawWs(deviceUrl(deviceId));
-  assert.equal((await registration(duplicate)).code, "identity_in_use");
-  duplicate.ws.close();
-  owner.ws.close();
-  await delay(300);
-  pass("duplicate live identities are rejected");
-  const replay = await rawWs(deviceUrl(deviceId));
-  await replay.next();
-  replay.send(proof);
-  assert.equal((await replay.next()).type, "error");
-  replay.ws.close();
-  pass("registration challenges reject captured proof replay");
-  const attackerKeys = generateKeyPairSync("ed25519"),
-    attackerPub = attackerKeys.publicKey
-      .export({ format: "der", type: "spki" })
-      .subarray(-32),
-    attackerId = createHash("sha256").update(attackerPub).digest("hex");
-  const attacker = await rawWs(deviceUrl(attackerId));
-  assert.equal(
-    (await registration(attacker, ownedName, attackerKeys, attackerPub)).code,
-    "name_unavailable",
-  );
-  attacker.ws.close();
-  pass("offline names stay reserved and reject another valid identity");
-  const resumed = await rawWs(deviceUrl(deviceId));
-  const renamed = ownedName + "-renamed";
-  assert.equal((await registration(resumed, renamed)).name, renamed);
-  pass("the original identity reconnects and renames without changing its ID");
-  const aliasAttacker = await rawWs(deviceUrl(attackerId));
-  assert.equal(
-    (await registration(aliasAttacker, ownedName, attackerKeys, attackerPub))
-      .code,
-    "name_unavailable",
-  );
-  aliasAttacker.ws.close();
-  const timeoutBrowser = await rawWs(
-    `ws://127.0.0.1:${cloudPort}/relay/${ownedName}/browser`,
-  );
-  await timeoutBrowser.next();
-  timeoutBrowser.send({ type: "auth.start", a: "ab".repeat(256) });
-  assert.equal((await resumed.next()).type, "forward");
-  assert.equal((await timeoutBrowser.next()).type, "error");
-  timeoutBrowser.ws.close();
-  resumed.ws.close();
-  pass(
-    "old names resolve to the same owner and relay request timeouts remain bounded",
-  );
-  const spoof = await rawWs(deviceUrl(read.device_id));
-  await spoof.next();
-  spoof.send({
-    ...lastProof,
-    deviceId: read.device_id,
-    name,
-    signature: "00".repeat(64),
-  });
-  assert.equal((await spoof.next()).type, "error");
-  spoof.ws.close();
-  pass("device impersonation with another public key is rejected");
-  const malformed = await rawWs(
-    `ws://127.0.0.1:${cloudPort}/relay/${name}/browser`,
-  );
-  await malformed.next();
-  malformed.ws.send("{");
-  assert.equal((await malformed.next()).type, "error");
-  malformed.ws.close();
-  const oversized = await fetch(`${local}/api`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: " ".repeat(32769),
-  });
-  assert.equal(oversized.status, 413);
-  pass("invalid JSON and oversized application requests are rejected");
-  remoteClient.close();
-  localClient.close();
-  await stop(simulator);
-  startSimulator();
-  await until(async () => {
-    const r = await fetch(`${local}/bootstrap`);
-    return r.ok && !(await r.json()).setup;
-  });
-  localClient = await new Client().open("", password, false);
-  assert(
-    (await localClient.call("presets.list")).some((x) => x.name === "Opening"),
-  );
-  assert.deepEqual(
-    (await localClient.call("wifi.list")).map((x) => x.id),
-    ["backup", "studio", school],
-  );
-  assert.equal((await localClient.call("route.get"))[0].source, sourceA);
-  assert.equal((await localClient.call("event.status")).enabled, true);
-  assert.equal((await localClient.call("simple.list")).length, 2);
-  assert(
-    (await localClient.call("sources.saved.list")).some(
-      (s) => s.display_name === "Teacher PC",
-    ),
-  );
-  await localClient.call("event.disable", {
-    confirmed: true,
-    expected_revision: (await localClient.call("device.info")).revision,
-  });
-  pass(
-    "saved aliases, profiles, and Event Mode persist across an actual simulator restart",
-  );
-  pass(
-    "presets and Wi-Fi priorities survive restart; live routing is read rather than restored",
-  );
-  await until(async () => {
-    return (await localClient.call("network.status")).cloud === "connected";
-  });
-  remoteClient = await new Client().open(name, password);
-  await remoteClient.call("device.health");
-  pass("persistent device identity reconnects after simulator restart");
-  remoteClient.close();
-  await stop(worker);
-  worker = startWorker();
-  await until(async () => (await fetch(cloud)).ok, 60000);
-  await until(
-    async () =>
-      (await localClient.call("network.status")).cloud === "connected",
-    60000,
-  );
-  remoteClient = await new Client().open(name, password);
-  await remoteClient.call("device.health");
-  const afterRestart = await rawWs(deviceUrl(attackerId));
-  assert.equal(
-    (await registration(afterRestart, ownedName, attackerKeys, attackerPub))
-      .code,
-    "name_unavailable",
-  );
-  afterRestart.ws.close();
-  pass(
-    "SQLite reservations survive a complete Worker restart while the owner reconnects",
-  );
-  const registryRows = JSON.parse(
-    execFileSync(
-      "python3",
-      [
-        "-c",
-        `import sqlite3,pathlib,json,sys
+  if (process.env.DROUTER_TEST_RELOAD_ONLY !== "1") {
+    await checkOverhaul({
+      local,
+      cloud,
+      name,
+      password,
+      root,
+      admin: localClient,
+      fault,
+      pass,
+    });
+    await modification3({
+      admin: localClient,
+      local,
+      cloud,
+      name,
+      password,
+      receivers: discovered,
+      fault,
+      pass,
+      root,
+    });
+    await localClient.call("route.set", { receiver, source: sourceA });
+    const socket = await rawWs(
+      `ws://127.0.0.1:${cloudPort}/relay/${name}/browser`,
+    );
+    await socket.next();
+    socket.send({ type: "rpc", seq: 1, data: "abcd" });
+    assert.equal((await socket.next()).type, "error");
+    socket.ws.close();
+    pass("unauthorized WebSocket cannot issue commands");
+    const keys = generateKeyPairSync("ed25519"),
+      publicKey = keys.publicKey
+        .export({ format: "der", type: "spki" })
+        .subarray(-32),
+      deviceId = createHash("sha256").update(publicKey).digest("hex"),
+      ownedName = "registry-test-device";
+    let lastProof;
+    async function registration(
+      socket,
+      requestedName = ownedName,
+      identity = keys,
+      pub = publicKey,
+    ) {
+      const challenge = await socket.next();
+      const id = createHash("sha256").update(pub).digest("hex");
+      lastProof = {
+        type: "register",
+        deviceId: id,
+        name: requestedName,
+        publicKey: pub.toString("hex"),
+        signature: sign(
+          null,
+          Buffer.from(
+            `drouter-register-v2\n${id}\n${requestedName}\n${challenge.nonce}`,
+          ),
+          identity.privateKey,
+        ).toString("hex"),
+      };
+      socket.send(lastProof);
+      return socket.next();
+    }
+    const deviceUrl = (id) => `ws://127.0.0.1:${cloudPort}/relay/${id}/device`;
+    const owner = await rawWs(deviceUrl(deviceId));
+    assert.equal((await registration(owner)).type, "registered");
+    const proof = lastProof;
+    const duplicate = await rawWs(deviceUrl(deviceId));
+    assert.equal((await registration(duplicate)).code, "identity_in_use");
+    duplicate.ws.close();
+    owner.ws.close();
+    await delay(300);
+    pass("duplicate live identities are rejected");
+    const replay = await rawWs(deviceUrl(deviceId));
+    await replay.next();
+    replay.send(proof);
+    assert.equal((await replay.next()).type, "error");
+    replay.ws.close();
+    pass("registration challenges reject captured proof replay");
+    const attackerKeys = generateKeyPairSync("ed25519"),
+      attackerPub = attackerKeys.publicKey
+        .export({ format: "der", type: "spki" })
+        .subarray(-32),
+      attackerId = createHash("sha256").update(attackerPub).digest("hex");
+    const attacker = await rawWs(deviceUrl(attackerId));
+    assert.equal(
+      (await registration(attacker, ownedName, attackerKeys, attackerPub)).code,
+      "name_unavailable",
+    );
+    attacker.ws.close();
+    pass("offline names stay reserved and reject another valid identity");
+    const resumed = await rawWs(deviceUrl(deviceId));
+    const renamed = ownedName + "-renamed";
+    assert.equal((await registration(resumed, renamed)).name, renamed);
+    pass(
+      "the original identity reconnects and renames without changing its ID",
+    );
+    const aliasAttacker = await rawWs(deviceUrl(attackerId));
+    assert.equal(
+      (await registration(aliasAttacker, ownedName, attackerKeys, attackerPub))
+        .code,
+      "name_unavailable",
+    );
+    aliasAttacker.ws.close();
+    const timeoutBrowser = await rawWs(
+      `ws://127.0.0.1:${cloudPort}/relay/${ownedName}/browser`,
+    );
+    await timeoutBrowser.next();
+    timeoutBrowser.send({ type: "auth.start", a: "ab".repeat(256) });
+    assert.equal((await resumed.next()).type, "forward");
+    assert.equal((await timeoutBrowser.next()).type, "error");
+    timeoutBrowser.ws.close();
+    resumed.ws.close();
+    pass(
+      "old names resolve to the same owner and relay request timeouts remain bounded",
+    );
+    const spoof = await rawWs(deviceUrl(read.device_id));
+    await spoof.next();
+    spoof.send({
+      ...lastProof,
+      deviceId: read.device_id,
+      name,
+      signature: "00".repeat(64),
+    });
+    assert.equal((await spoof.next()).type, "error");
+    spoof.ws.close();
+    pass("device impersonation with another public key is rejected");
+    const malformed = await rawWs(
+      `ws://127.0.0.1:${cloudPort}/relay/${name}/browser`,
+    );
+    await malformed.next();
+    malformed.ws.send("{");
+    assert.equal((await malformed.next()).type, "error");
+    malformed.ws.close();
+    const oversized = await fetch(`${local}/api`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: " ".repeat(32769),
+    });
+    assert.equal(oversized.status, 413);
+    pass("invalid JSON and oversized application requests are rejected");
+    remoteClient.close();
+    localClient.close();
+    await stop(simulator);
+    startSimulator();
+    await until(async () => {
+      const r = await fetch(`${local}/bootstrap`);
+      return r.ok && !(await r.json()).setup;
+    });
+    localClient = await new Client().open("", password, false);
+    assert(
+      (await localClient.call("presets.list")).some(
+        (x) => x.name === "Opening",
+      ),
+    );
+    assert.deepEqual(
+      (await localClient.call("wifi.list")).map((x) => x.id),
+      ["backup", "studio", school],
+    );
+    assert.equal((await localClient.call("route.get"))[0].source, sourceA);
+    assert.equal((await localClient.call("event.status")).enabled, true);
+    assert.equal((await localClient.call("simple.list")).length, 2);
+    assert(
+      (await localClient.call("sources.saved.list")).some(
+        (s) => s.display_name === "Teacher PC",
+      ),
+    );
+    await localClient.call("event.disable", {
+      confirmed: true,
+      expected_revision: (await localClient.call("device.info")).revision,
+    });
+    pass(
+      "saved aliases, profiles, and Event Mode persist across an actual simulator restart",
+    );
+    pass(
+      "presets and Wi-Fi priorities survive restart; live routing is read rather than restored",
+    );
+    await until(async () => {
+      return (await localClient.call("network.status")).cloud === "connected";
+    });
+    remoteClient = await new Client().open(name, password);
+    await remoteClient.call("device.health");
+    pass("persistent device identity reconnects after simulator restart");
+    remoteClient.close();
+    await stop(worker);
+    worker = startWorker();
+    await until(async () => (await fetch(cloud)).ok, 60000);
+    await until(
+      async () =>
+        (await localClient.call("network.status")).cloud === "connected",
+      60000,
+    );
+    remoteClient = await new Client().open(name, password);
+    await remoteClient.call("device.health");
+    const afterRestart = await rawWs(deviceUrl(attackerId));
+    assert.equal(
+      (await registration(afterRestart, ownedName, attackerKeys, attackerPub))
+        .code,
+      "name_unavailable",
+    );
+    afterRestart.ws.close();
+    pass(
+      "SQLite reservations survive a complete Worker restart while the owner reconnects",
+    );
+    const registryRows = JSON.parse(
+      execFileSync(
+        "python3",
+        [
+          "-c",
+          `import sqlite3,pathlib,json,sys
 out=[]
 for p in pathlib.Path(sys.argv[1]).rglob('*.sqlite'):
  c=sqlite3.connect('file:'+str(p)+'?mode=ro',uri=True)
  if c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='devices'").fetchone():
   out.append({'columns':[x[1] for x in c.execute('PRAGMA table_info(devices)')],'devices':list(c.execute('SELECT * FROM devices')),'names':list(c.execute('SELECT * FROM names'))})
 print(json.dumps(out))`,
-        path.join(state, "cloud"),
-      ],
-      { encoding: "utf8" },
-    ),
-  );
-  assert.equal(registryRows.length, 1);
-  assert.deepEqual(registryRows[0].columns, [
-    "device_id",
-    "name",
-    "public_key",
-    "registered_at",
-    "renamed_at",
-    "last_connected",
-  ]);
-  assert(registryRows[0].names.some((r) => r[0] === ownedName));
-  assert(!JSON.stringify(registryRows).includes(password));
-  assert(!JSON.stringify(registryRows).includes("wifi-secret"));
-  assert(!JSON.stringify(registryRows).includes("Opening"));
-  assert(!JSON.stringify(registryRows).includes("Classroom"));
-  assert(!JSON.stringify(registryRows).includes("Teacher PC"));
-  pass(
-    "actual persisted registry has only public identity metadata, with no device configuration or credentials",
-  );
-  await localClient.call("sessions.revoke");
-  await assert.rejects(remoteClient.call("device.info"));
-  pass("local session revocation invalidates remote controls");
-  localClient.close();
-  localClient = await new Client().open("", password, false);
-  const recovery = await localClient.call("identity.export");
-  const changedPassword = "new device password for secure tests";
-  const beforeChange = await localClient.call("device.info");
-  await localClient.call("settings.update", {
-    expected_revision: beforeChange.revision,
-    password: changedPassword,
-  });
-  localClient.close();
-  await assert.rejects(new Client().open(name, password));
-  await delay(4100);
-  remoteClient = await new Client().open(name, changedPassword);
-  assert.equal(
-    (await remoteClient.call("device.info")).device_id,
-    recovery.device_id,
-  );
-  pass(
-    "device-only password change rejects the old password without changing reserved identity",
-  );
-  localClient = await new Client().open("", changedPassword, false);
-  const beforeRestore = await localClient.call("device.info");
-  await assert.rejects(remoteClient.call("identity.export"), /local access/);
-  await localClient.call("identity.restore", {
-    identity: recovery.identity,
-    name,
-    password,
-    expected_revision: beforeRestore.revision,
-  });
-  await assert.rejects(remoteClient.call("device.info"));
-  localClient.close();
-  remoteClient.close();
-  remoteClient = await new Client().open(name, password);
-  assert.equal(
-    (await remoteClient.call("device.info")).device_id,
-    recovery.device_id,
-  );
-  pass(
-    "local identity recovery rekeys password authentication, preserves reservation, and revokes remote sessions",
-  );
+          path.join(state, "cloud"),
+        ],
+        { encoding: "utf8" },
+      ),
+    );
+    assert.equal(registryRows.length, 1);
+    assert.deepEqual(registryRows[0].columns, [
+      "device_id",
+      "name",
+      "public_key",
+      "registered_at",
+      "renamed_at",
+      "last_connected",
+    ]);
+    assert(registryRows[0].names.some((r) => r[0] === ownedName));
+    assert(!JSON.stringify(registryRows).includes(password));
+    assert(!JSON.stringify(registryRows).includes("wifi-secret"));
+    assert(!JSON.stringify(registryRows).includes("Opening"));
+    assert(!JSON.stringify(registryRows).includes("Classroom"));
+    assert(!JSON.stringify(registryRows).includes("Teacher PC"));
+    pass(
+      "actual persisted registry has only public identity metadata, with no device configuration or credentials",
+    );
+    await localClient.call("sessions.revoke");
+    await assert.rejects(remoteClient.call("device.info"));
+    pass("local session revocation invalidates remote controls");
+    localClient.close();
+    localClient = await new Client().open("", password, false);
+    const recovery = await localClient.call("identity.export");
+    const changedPassword = "new device password for secure tests";
+    const beforeChange = await localClient.call("device.info");
+    await localClient.call("settings.update", {
+      expected_revision: beforeChange.revision,
+      password: changedPassword,
+    });
+    localClient.close();
+    await assert.rejects(new Client().open(name, password));
+    await delay(4100);
+    remoteClient = await new Client().open(name, changedPassword);
+    assert.equal(
+      (await remoteClient.call("device.info")).device_id,
+      recovery.device_id,
+    );
+    pass(
+      "device-only password change rejects the old password without changing reserved identity",
+    );
+    localClient = await new Client().open("", changedPassword, false);
+    const beforeRestore = await localClient.call("device.info");
+    await assert.rejects(remoteClient.call("identity.export"), /local access/);
+    await localClient.call("identity.restore", {
+      identity: recovery.identity,
+      name,
+      password,
+      expected_revision: beforeRestore.revision,
+    });
+    await assert.rejects(remoteClient.call("device.info"));
+    localClient.close();
+    remoteClient.close();
+    remoteClient = await new Client().open(name, password);
+    assert.equal(
+      (await remoteClient.call("device.info")).device_id,
+      recovery.device_id,
+    );
+    pass(
+      "local identity recovery rekeys password authentication, preserves reservation, and revokes remote sessions",
+    );
 
-  remoteClient.close();
-  localClient.close();
-  await checkRemoteAccess({ local, password, root });
-  remoteClient = await new Client().open(name, password);
-  assert.equal((await remoteClient.call("auth.session")).role, "admin");
-  remoteClient.close();
-  pass(
-    "mobile remote-access enable/disable reports confirmed changes, reconnects and shows 24-hour sessions",
-  );
+    remoteClient.close();
+    localClient.close();
+    await checkRemoteAccess({ local, password, root });
+    remoteClient = await new Client().open(name, password);
+    assert.equal((await remoteClient.call("auth.session")).role, "admin");
+    remoteClient.close();
+    pass(
+      "mobile remote-access enable/disable reports confirmed changes, reconnects and shows 24-hour sessions with 6-hour settings access",
+    );
+  }
   console.log(`\n${checks} integration checks passed.`);
 } catch (e) {
   console.error(e);

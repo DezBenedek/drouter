@@ -123,6 +123,7 @@ export function Modal({
   footer,
   onClose,
   source = false,
+  onMount,
 }: {
   title: string;
   description?: string;
@@ -130,6 +131,7 @@ export function Modal({
   footer?: ReactNode;
   onClose: () => void;
   source?: boolean;
+  onMount?: (dialog: HTMLDialogElement) => void | (() => void);
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const close = useRef(onClose);
@@ -138,7 +140,9 @@ export function Modal({
     const d = ref.current!;
     const previous = document.activeElement as HTMLElement | null;
     d.showModal();
+    const cleanup = onMount?.(d);
     return () => {
+      if (typeof cleanup === "function") cleanup();
       d.close();
       previous?.focus();
     };

@@ -240,29 +240,251 @@ export async function toggleEvent(client) {
 export function eventControl(enabled) {
   return `<button type="button" class="event-toggle" data-action="event-toggle" role="switch" aria-checked="${!!enabled}" aria-label="${t("Event Mode")}"><span>${t("Event Mode")}</span><span class="switch-track" aria-hidden="true"></span></button>`;
 }
+const settingsSections = [
+  "Simple Mode",
+  "Device",
+  "Network",
+  "Remote access",
+  "Security",
+  "System",
+];
+const settingsSelection = new WeakMap();
+let activityState = {
+  title: "Ready",
+  detail: "",
+  current: 0,
+  total: 0,
+  kind: "idle",
+  time: Date.now(),
+};
+let activitySerial = 0;
+const activityHistory = [];
+const activityTasks = new Map();
+function renderActivity() {
+  for (const host of document.querySelectorAll("[data-activity-host]")) {
+    if (!host.querySelector(".activity-current"))
+      host.innerHTML =
+        '<div class="activity-current" role="status" aria-live="polite"><span class="activity-light" aria-hidden="true"></span><time></time><strong data-user-content></strong><span class="activity-detail" data-user-content></span></div>';
+    host.dataset.kind = activityState.kind;
+    host.querySelector("time").textContent = new Date(
+      activityState.time,
+    ).toLocaleTimeString([], { hour12: false });
+    host.querySelector("strong").textContent =
+      t(activityState.title) +
+      (activityState.total
+        ? ` (${activityState.current}/${activityState.total})`
+        : "");
+    host.querySelector(".activity-detail").textContent = t(
+      activityState.detail,
+    );
+  }
+  const history = document.querySelector(".activity-history-list");
+  if (history)
+    history.innerHTML = activityHistory
+      .slice(-30)
+      .reverse()
+      .map(
+        (entry) =>
+          `<div data-kind="${entry.kind}"><time>${new Date(entry.time).toLocaleTimeString([], { hour12: false })}</time><span data-user-content>${e(t(entry.title))}${entry.total ? ` (${entry.current}/${entry.total})` : ""} · ${e(t(entry.detail))}</span></div>`,
+      )
+      .join("");
+}
+export function beginTask(title, total = 0) {
+  const serial = ++activitySerial;
+  let ownState = {
+    title,
+    total,
+    current: 0,
+    detail: "",
+    kind: "running",
+    time: Date.now(),
+  };
+  const update = (kind, current, detail) => {
+    ownState = { title, total, current, detail, kind, time: Date.now() };
+    if (kind === "running") activityTasks.set(serial, ownState);
+    else activityTasks.delete(serial);
+    activityState = [...activityTasks.values()].at(-1) || ownState;
+    activityHistory.push({ ...ownState });
+    if (activityHistory.length > 30) activityHistory.shift();
+    renderActivity();
+  };
+  update("running", 0, "");
+  return {
+    setTotal(value) {
+      total = value;
+      update("running", 0, ownState.detail);
+    },
+    step(current, detail) {
+      update("running", current, detail);
+    },
+    done(detail = t("Completed")) {
+      update("done", total, detail);
+    },
+    fail(detail) {
+      update("error", ownState.current, detail);
+    },
+  };
+}
+export function installActivity() {
+  if (document.querySelector(".activity-bar")) return;
+  const bar = document.createElement("div");
+  bar.className = "activity-bar";
+  bar.innerHTML = `<div data-activity-host></div><details class="activity-history"><summary>${t("Activity log")}</summary><div class="activity-history-list" role="log" aria-live="off"></div></details>`;
+  document.body.prepend(bar);
+  document.body.classList.add("with-activity");
+  document.addEventListener("drouter-language", renderActivity);
+  renderActivity();
+}
+function dialogActivity(dialog) {
+  if (dialog.querySelector("[data-activity-host]")) return;
+  const line = document.createElement("div");
+  line.className = "activity-inline";
+  line.setAttribute("data-activity-host", "");
+  dialog.querySelector(".dialog-body").before(line);
+  renderActivity();
+}
+function controlsChanged(client) {
+  document.dispatchEvent(
+    new CustomEvent("drouter-controls-refresh", { detail: { client } }),
+  );
+}
+export function installSettingsSidebar(dialog, client) {
+  dialog.classList.add("sidebar-dialog", "settings-dialog");
+  const body = dialog.querySelector(".dialog-body");
+  body.classList.add("settings-dialog-layout");
+  const panes = [...body.querySelectorAll(".settings-single > .settings-card")];
+  const nav = document.createElement("nav");
+  nav.className = "dialog-sidebar";
+  nav.setAttribute("aria-label", t("Settings sections"));
+  nav.innerHTML = `<span class="sidebar-caption">DRouter</span>${panes.map((pane, index) => `<button type="button" data-settings-section="${index}">${t(settingsSections[index] || "Device")}</button>`).join("")}<div class="sidebar-divider"></div><button type="button" data-settings-logout class="sidebar-logout">${t("Disconnect")}</button>`;
+  body.prepend(nav);
+  const logout = body.querySelector(
+    '.settings-logout-action, [data-action="logout"]',
+  );
+  if (logout) logout.hidden = true;
+  panes.forEach((pane, index) => {
+    pane.dataset.settingsPane = String(index);
+    if (pane.tagName === "DETAILS") {
+      pane.open = true;
+      const heading = document.createElement("h2");
+      heading.className = "settings-panel-title";
+      heading.textContent = t(settingsSections[index] || "Device");
+      pane.prepend(heading);
+    }
+  });
+  const select = (index) => {
+    const selected = Math.min(Math.max(0, index), panes.length - 1);
+    settingsSelection.set(client, selected);
+    panes.forEach((pane, i) => {
+      pane.hidden = i !== selected;
+    });
+    nav.querySelectorAll("[data-settings-section]").forEach((button) => {
+      if (Number(button.dataset.settingsSection) === selected)
+        button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
+  };
+  nav.onclick = (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.hasAttribute("data-settings-section"))
+      select(Number(button.dataset.settingsSection));
+    if (button.hasAttribute("data-settings-logout")) logout?.click();
+  };
+  select(settingsSelection.get(client) || 0);
+  dialogActivity(dialog);
+  localize(nav);
+  return () => nav.remove();
+}
+export async function resetNdiLists(client, receiver = null) {
+  const task = beginTask("NDI list reset");
+  task.step(0, t("Reading device list"));
+  const devices = receiver
+    ? [receiver]
+    : (
+        await client.call("receivers.list").catch((error) => {
+          task.fail(t(error.message));
+          throw error;
+        })
+      ).map((r) => r.config);
+  task.setTotal(devices.length);
+  const errors = [];
+  for (let i = 0; i < devices.length; i++) {
+    const device = devices[i];
+    task.step(
+      i + 1,
+      `${device.label} · ${t("Clearing cached sources and discovering active NDI sources")}`,
+    );
+    try {
+      await client.call("birddog.sources.reset", { id: device.id });
+    } catch (error) {
+      errors.push(`${device.label}: ${t(error.message)}`);
+    }
+  }
+  controlsChanged(client);
+  if (errors.length) {
+    task.fail(errors.join(" · "));
+    toast(errors.join("\n"), "error");
+  } else {
+    task.done(t("Active NDI source lists loaded"));
+    toast("Active NDI source lists loaded", "success");
+  }
+}
 export async function autoFix(client, actions = null) {
+  const task = beginTask("Auto bugfix");
+  task.step(0, t("Reading device list"));
   const receivers = actions
     ? [
         ...new Map(
           actions.map((a) => [a.receiver, { id: a.receiver, label: a.label }]),
         ).values(),
       ]
-    : (await client.call("receivers.list")).map((r) => r.config);
+    : (
+        await client.call("receivers.list").catch((error) => {
+          task.fail(t(error.message));
+          throw error;
+        })
+      ).map((r) => r.config);
   if (!receivers.length) {
+    task.done(t("No receivers to check."));
     toast("No receivers to check.");
     return;
   }
   const failures = [];
+  const steps = 6;
+  task.setTotal(receivers.length * steps);
   toast("Auto bugfix running…", "loading", "autofix");
-  for (const receiver of receivers) {
+  for (let index = 0; index < receivers.length; index++) {
+    const receiver = receivers[index];
+    const op = actions ? "simple.repair" : "route.repair";
     try {
-      await client.call(actions ? "simple.repair" : "route.repair", {
-        id: receiver.id,
-      });
+      task.step(
+        index * steps + 1,
+        `${receiver.label} · ${t("Starting receiver diagnostics")}`,
+      );
+      let result = await client.call(op, { id: receiver.id, staged: true });
+      while (!result.done) {
+        task.step(
+          index * steps + result.completed + 1,
+          `${receiver.label} · ${t(result.next)}`,
+        );
+        result = await client.call(op, {
+          id: receiver.id,
+          token: result.token,
+        });
+      }
+      task.step(
+        (index + 1) * steps,
+        `${receiver.label} · ${t("Routing verified")}${result.notes.length ? " · " + result.notes.map((note) => t(note)).join(" · ") : ""}`,
+      );
     } catch (error) {
       failures.push(`${receiver.label}: ${t(error.message)}`);
+      task.step((index + 1) * steps, failures.at(-1));
     }
   }
+  controlsChanged(client);
+  if (failures.length) task.fail(failures.join(" · "));
+  else task.done(t("Auto bugfix complete. Routes verified."));
   toast(
     failures.length
       ? `${t("Some receivers could not be repaired.")}\n${failures.join("\n")}`
@@ -273,7 +495,8 @@ export async function autoFix(client, actions = null) {
 }
 const routeCache = new WeakMap();
 const receiverFocusCache = new WeakMap();
-const currentSource = (r) => r.state.source || r.state.last_source;
+const currentSource = (r) =>
+  r.state.online ? r.state.source : r.state.last_source;
 async function load(client, page) {
   const access = page === "Access Control";
   const ops = access
@@ -305,17 +528,14 @@ async function load(client, page) {
     cache = new Map();
     routeCache.set(client, cache);
   }
-  for (const id of page === "Access Control" ? [] : cache.keys())
-    if (!receivers.some((r) => r.config.id === id)) cache.delete(id);
-  for (const receiver of receivers) {
-    if (receiver.state.source)
-      cache.set(receiver.config.id, receiver.state.source);
-    receiver.state.last_source = cache.get(receiver.config.id) || null;
-  }
+  for (const receiver of receivers)
+    receiver.state.last_source =
+      receiver.state.source || cache.get(receiver.config.id) || null;
   return {
     info,
     saved,
     sources: discovered.sources,
+    sourceErrors: discovered.errors || [],
     receivers,
     profiles,
     event: { enabled: info.event_mode },
@@ -390,6 +610,9 @@ export function mountControl(host, client, page, changed = () => {}) {
     pendingRoute = null,
     routeVersion = 0,
     arranging = false,
+    editingId = null,
+    draft = null,
+    showPassword = false,
     focusedReceiver = receiverFocusCache.get(client) || "";
   const dialogs = new Set();
   const editDialog = (...args) => {
@@ -398,22 +621,44 @@ export function mountControl(host, client, page, changed = () => {}) {
     d.addEventListener("close", () => dialogs.delete(d));
     return d;
   };
-  async function refresh() {
-    if (disposed) return;
-    if (refreshing) await refreshing;
-    if (disposed) return;
+  function refresh() {
+    if (disposed) return Promise.resolve();
+    if (refreshing) return refreshing;
     const version = routeVersion;
-    const request = load(client, page);
+    const request = load(client, page)
+      .then((next) => {
+        if (!disposed && version === routeVersion) {
+          const cache = routeCache.get(client);
+          for (const id of cache.keys())
+            if (!next.receivers.some((r) => r.config.id === id))
+              cache.delete(id);
+          for (const receiver of next.receivers) {
+            if (receiver.state.online) {
+              if (receiver.state.source)
+                cache.set(receiver.config.id, receiver.state.source);
+              else {
+                cache.delete(receiver.config.id);
+                receiver.state.last_source = null;
+              }
+            }
+          }
+          if (data && next.sourceErrors.length)
+            for (const source of data.sources)
+              if (!next.sources.some((s) => s.name === source.name))
+                next.sources.push(source);
+          data = next;
+          if (!host.querySelector("[data-source-select]:focus")) render();
+        }
+      })
+      .finally(() => {
+        if (refreshing === request) refreshing = null;
+      });
     refreshing = request;
-    try {
-      const next = await request;
-      if (!disposed && version === routeVersion) {
-        data = next;
-        render();
-      }
-    } finally {
-      if (refreshing === request) refreshing = null;
-    }
+    return request;
+  }
+  async function refreshAfterChange() {
+    if (refreshing) await refreshing.catch(() => {});
+    return refresh();
   }
   async function mutate(op, params, summary) {
     const safety =
@@ -423,6 +668,14 @@ export function mountControl(host, client, page, changed = () => {}) {
       op.startsWith("event.");
     const perform = async () => {
       working = true;
+      const task = beginTask(
+        op.startsWith("simple.")
+          ? "Simple Mode"
+          : op.startsWith("sources.")
+            ? "Sources"
+            : "Device",
+      );
+      task.step(0, summary || t("Saving changes"));
       try {
         await client.call(op, {
           ...params,
@@ -432,7 +685,9 @@ export function mountControl(host, client, page, changed = () => {}) {
         lastMarkup = "";
         await refresh();
         await changed();
+        task.done();
       } catch (error) {
+        task.fail(t(error.message));
         if (error.code === "revision_conflict") await refresh();
         throw error;
       } finally {
@@ -449,6 +704,8 @@ export function mountControl(host, client, page, changed = () => {}) {
     working = true;
     routeVersion += 1; // Discard reads started before this switch.
     pendingRoute = { receiver: receiver.config.id, source };
+    const task = beginTask("Switching…");
+    task.step(0, `${receiver.config.label} ← ${source}`);
     toast("Switching…", "loading", "routing");
     render();
     try {
@@ -456,7 +713,10 @@ export function mountControl(host, client, page, changed = () => {}) {
         receiver: receiver.config.id,
         source,
       });
-      if (disposed) return;
+      if (disposed) {
+        task.fail(t("Device disconnected. Reconnect to continue."));
+        return;
+      }
       const current = data.receivers.find(
         (r) => r.config.id === receiver.config.id,
       );
@@ -469,8 +729,9 @@ export function mountControl(host, client, page, changed = () => {}) {
       routeCache.get(client)?.set(receiver.config.id, confirmed.source);
       pendingRoute = null;
       render();
+      task.done(`${receiver.config.label} ← ${confirmed.source}`);
       toast("Routing verified", "success", "routing");
-      await refresh().catch(() =>
+      void refreshAfterChange().catch(() =>
         toast(
           "Refresh failed. Displayed state may be out of date.",
           "error",
@@ -478,13 +739,14 @@ export function mountControl(host, client, page, changed = () => {}) {
         ),
       );
     } catch (error) {
+      task.fail(t(error.message));
       if (!disposed) {
         toast(
           `${receiver.config.label}: ${t(error.message)}`,
           "error",
           "routing",
         );
-        await refresh().catch(() => {});
+        void refreshAfterChange().catch(() => {});
       }
     } finally {
       working = false;
@@ -546,6 +808,8 @@ export function mountControl(host, client, page, changed = () => {}) {
       `${field("Name", "label", config?.label || "", 'required maxlength="64"')}${field("IP address", "ip", config?.ip || "", 'required inputmode="decimal" placeholder="192.168.1.100"')}<details class="disclosure"><summary>${t("Advanced")}</summary><div class="form-grid">${field("API port", "port", config?.port || 8080, 'type="number" min="1" max="65535"')}${field("Channel", "channel", config?.channel || 1, 'type="number" min="1" max="4"')}</div></details>${receiver ? b("Remove receiver", "remove-output", 'class="quiet danger"') : b("Discover receivers", "discover-output")}`,
       async (f, d) => {
         working = true;
+        const task = beginTask("Save device");
+        task.step(0, String(f.get("label")));
         try {
           await client.call("receivers.add", {
             id: config?.id || randomId(),
@@ -556,7 +820,11 @@ export function mountControl(host, client, page, changed = () => {}) {
           });
           await refresh();
           await changed();
+          task.done();
           d.close();
+        } catch (error) {
+          task.fail(t(error.message));
+          throw error;
         } finally {
           working = false;
         }
@@ -603,131 +871,141 @@ export function mountControl(host, client, page, changed = () => {}) {
       },
     );
   }
-  function profileEditor(profile) {
-    let actions = structuredClone(
-      profile?.actions || [
-        {
-          id: randomId(),
-          label: "",
-          receiver: data.receivers[0]?.config.id || "",
-          source: data.saved[0]?.source || data.sources[0]?.name || "",
-          icon: null,
-          enabled: true,
-          order: 0,
-        },
-      ],
-    );
-    const d = editDialog(
-      profile ? "Edit Simple Mode" : "Create Simple Mode",
-      `<label class="field">${t("Password")}<span class="password-control"><input name="password" aria-label="${t("Password")}" type="password" autocomplete="new-password" ${profile ? `placeholder="${t("Leave empty to keep the current password.")}"` : "required"}>${b("Show password", "visible")}</span></label><p class="help-text">${t("Sign in with this separate password to use the fixed buttons.")}</p><div class="action-heading"><h3>${t("Action buttons")}</h3><small data-count></small></div><div data-actions></div>${b("+ Add button", "add")}`,
-      async (f, d) => {
-        readActions();
-        if (actions.length < 1 || actions.length > 10)
-          throw Error("Use 1–10 action buttons");
-        const password = f.get("password");
-        if (
-          password &&
-          (Array.from(password).length < 4 || Array.from(password).length > 128)
-        )
-          throw Error("Password must contain 4–128 Unicode characters");
-        const params = {
-          name: profile?.name || actions[0].label,
-          description: profile?.description || "",
-          enabled: profile?.enabled ?? true,
-          actions,
-          ...(password ? { password } : {}),
-          ...(profile ? { id: profile.id } : {}),
-        };
-        const mappings = actions
-          .map(
-            (a) =>
-              `${a.label}: ${data.receivers.find((r) => r.config.id === a.receiver)?.config.label || a.receiver} ← ${labelFor(data, a.source)} (${a.source})`,
-          )
-          .join("\n");
-        if (
-          await mutate(
-            profile ? "simple.update" : "simple.create",
-            params,
-            `${params.name}\n${t(params.enabled ? "Enabled" : "Disabled")}\n${password ? t("Password will be changed") : ""}\n${mappings}`,
-          )
-        )
-          d.close();
-      },
-    );
-    d.classList.add("profile-editor");
-    function readActions() {
-      d.querySelectorAll("[data-button]").forEach((el, i) => {
-        actions[i] = {
-          ...actions[i],
-          label: el.querySelector("[name=label]").value,
-          icon: null,
-          receiver: el.querySelector("[name=receiver]").value,
-          source: el.querySelector("[name=source]").value,
-          enabled: actions[i].enabled,
-          order: i,
-        };
-      });
-    }
-    function draw() {
-      d.querySelector("[data-actions]").innerHTML = actions
-        .map(
-          (a, i) =>
-            `<div class="action-mapping" data-button="${i}"><span class="action-number">${i + 1}</span>${field("Name", "label", a.label, 'required maxlength="64"')}<label class="field">${t("Device")}<select name="receiver" aria-label="${t("Device")}" required>${data.receivers.map((r) => `<option value="${e(r.config.id)}" ${r.config.id === a.receiver ? "selected" : ""}>${e(r.config.label)}</option>`).join("")}</select></label><label class="field">${t("NDI source")}<select name="source" aria-label="${t("NDI source")}" required>${[
-              ...new Set([
-                ...data.saved.map((s) => s.source),
-                ...data.sources.map((s) => s.name),
-                a.source,
-              ]),
-            ]
-              .filter(Boolean)
-              .map(
-                (s) =>
-                  `<option value="${e(s)}" ${s === a.source ? "selected" : ""}>${e(labelFor(data, s))}</option>`,
-              )
-              .join(
-                "",
-              )}</select></label><div class="mapping-row-actions">${b("↑", "up", `aria-label="${t("Move button up")}" data-index="${i}" ${i === 0 ? "disabled" : ""}`)}${b("↓", "down", `aria-label="${t("Move button down")}" data-index="${i}" ${i === actions.length - 1 ? "disabled" : ""}`)}${b("×", "remove", `aria-label="${t("Remove button")}" data-index="${i}" ${actions.length === 1 ? "disabled" : ""}`)}</div></div>`,
-        )
-        .join("");
-      d.querySelector("[data-control=add]").disabled = actions.length >= 10;
-      d.querySelector("[data-count]").textContent = `${actions.length} / 10`;
-    }
-    d.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-control]");
-      if (!button) return;
-      const action = button.dataset.control,
-        i = Number(button.dataset.index);
-      if (action === "visible") {
-        const input = d.querySelector("[name=password]");
-        input.type = input.type === "password" ? "text" : "password";
-        button.textContent = t(
-          input.type === "password" ? "Show password" : "Hide password",
-        );
-        return;
-      }
-      if (!["add", "up", "down", "remove"].includes(action)) return;
-      readActions();
-      if (action === "add" && actions.length < 10) {
-        actions.push({
-          ...actions[0],
-          id: randomId(),
-          label: "",
-          icon: null,
-          enabled: true,
-        });
-      }
-      if (action === "remove" && actions.length > 1) {
-        actions.splice(i, 1);
-      }
-      const j = action === "up" ? i - 1 : i + 1;
-      if (["up", "down"].includes(action) && actions[j])
-        [actions[i], actions[j]] = [actions[j], actions[i]];
-      draw();
+  function blankSimpleAction() {
+    return {
+      id: randomId(),
+      label: "",
+      receiver: data.receivers[0]?.config.id || "",
+      source: data.saved[0]?.source || data.sources[0]?.name || "",
+      icon: null,
+      enabled: true,
+      order: 0,
+    };
+  }
+  function startSimpleCreate() {
+    editingId = "new";
+    draft = {
+      name: "",
+      password: "",
+      actions: [blankSimpleAction()],
+    };
+    showPassword = false;
+    lastMarkup = "";
+    render();
+  }
+  function startSimpleEdit(profile) {
+    if (!profile) return;
+    editingId = profile.id;
+    draft = {
+      name: profile.name || "",
+      password: "",
+      enabled: profile.enabled,
+      actions: structuredClone(profile.actions?.length ? profile.actions : [blankSimpleAction()]),
+    };
+    showPassword = false;
+    lastMarkup = "";
+    render();
+  }
+  function cancelSimpleEdit() {
+    editingId = null;
+    draft = null;
+    showPassword = false;
+    lastMarkup = "";
+    render();
+  }
+  function syncSimpleDraft() {
+    const form = host.querySelector("[data-simple-form]");
+    if (!form || !draft) return;
+    const nameInput = form.querySelector("[name=profile-name]");
+    const passInput = form.querySelector("[name=profile-password]");
+    if (nameInput) draft.name = nameInput.value;
+    if (passInput) draft.password = passInput.value;
+    form.querySelectorAll("[data-button]").forEach((el, i) => {
+      if (!draft.actions[i]) return;
+      draft.actions[i] = {
+        ...draft.actions[i],
+        label: el.querySelector("[name=label]")?.value ?? draft.actions[i].label,
+        receiver: el.querySelector("[name=receiver]")?.value ?? draft.actions[i].receiver,
+        source: el.querySelector("[name=source]")?.value ?? draft.actions[i].source,
+        enabled: true,
+        icon: null,
+        order: i,
+      };
     });
-    draw();
+  }
+  function simpleSourceOptions(selected) {
+    const all = [
+      ...new Set([
+        ...data.saved.map((s) => s.source),
+        ...data.sources.map((s) => s.name),
+        selected,
+      ]),
+    ].filter(Boolean);
+    if (!all.length) return `<option value="">${t("No source")}</option>`;
+    return all
+      .map(
+        (s) =>
+          `<option value="${e(s)}" ${s === selected ? "selected" : ""}>${e(labelFor(data, s))}</option>`,
+      )
+      .join("");
+  }
+  async function saveSimpleEdit() {
+    syncSimpleDraft();
+    const isNew = editingId === "new";
+    const profile = isNew ? null : data.profiles.find((p) => p.id === editingId);
+    const name = (draft.name || "").trim();
+    const password = draft.password || "";
+    if (!name) throw Error(t("Invalid label"));
+    if (draft.actions.length < 1 || draft.actions.length > 10)
+      throw Error(t("Use 1–10 action buttons"));
+    for (const a of draft.actions) {
+      if (!a.label.trim() || !a.receiver || !a.source) throw Error(t("Missing field"));
+    }
+    if ((isNew && !password) || password) {
+      if (Array.from(password).length < 4 || Array.from(password).length > 128)
+        throw Error(t("Password must contain 4–128 Unicode characters"));
+    }
+    const actions = draft.actions.map((a, i) => ({
+      ...a,
+      label: a.label.trim(),
+      order: i,
+      enabled: true,
+      icon: null,
+    }));
+    const params = {
+      name,
+      enabled: profile?.enabled ?? true,
+      actions,
+      ...(password ? { password } : {}),
+      ...(profile ? { id: profile.id } : {}),
+    };
+    working = true;
+    const task = beginTask("Simple Mode");
+    task.step(0, name);
+    try {
+      await client.call(isNew ? "simple.create" : "simple.update", {
+        ...params,
+        confirmed: true,
+        expected_revision: data.info.revision,
+      });
+      editingId = null;
+      draft = null;
+      showPassword = false;
+      lastMarkup = "";
+      await refresh();
+      await changed();
+      task.done();
+    } catch (error) {
+      task.fail(t(error.message));
+      if (error.code === "revision_conflict") await refresh();
+      throw error;
+    } finally {
+      working = false;
+    }
   }
   function render() {
     if (disposed || !data) return;
+    if (editingId && draft) syncSimpleDraft();
     const markup = controlMarkup(data, page, {
       search,
       sourceSearch,
@@ -735,6 +1013,9 @@ export function mountControl(host, client, page, changed = () => {}) {
       pendingRoute,
       arranging,
       focusedReceiver,
+      editingId,
+      draft,
+      showPassword,
     });
     if (markup === lastMarkup) return;
     const active = document.activeElement;
@@ -818,7 +1099,26 @@ export function mountControl(host, client, page, changed = () => {}) {
       next?.focus();
     }
   };
+  host.onfocusout = (event) => {
+    if (event.target.matches("[data-source-select]"))
+      queueMicrotask(() => {
+        if (!working && !disposed) render();
+      });
+  };
   host.onchange = (event) => {
+    const simpleField = event.target.closest("[data-simple-form] [name]");
+    if (simpleField && draft) {
+      syncSimpleDraft();
+      // Keep draft across re-renders without losing focus.
+      lastMarkup = "";
+      const focusKey = simpleField.getAttribute("data-focus");
+      render();
+      if (focusKey) {
+        const next = host.querySelector(`[data-focus="${focusKey}"]`);
+        if (next && document.activeElement !== next) next.focus({ preventScroll: true });
+      }
+      return;
+    }
     const select = event.target.closest("[data-source-select]");
     if (!select || !select.value || working) return;
     const receiver = data.receivers.find(
@@ -844,6 +1144,18 @@ export function mountControl(host, client, page, changed = () => {}) {
         const d = sourceEditor(source);
       }
       if (action === "receiver-add") receiverEditor();
+      if (action === "ndi-reset") {
+        routeVersion += 1;
+        working = true;
+        render();
+        try {
+          await resetNdiLists(client);
+          await refreshAfterChange();
+        } finally {
+          working = false;
+          render();
+        }
+      }
       if (action === "receiver-edit")
         receiverEditor(data.receivers.find((r) => r.config.id === id));
       if (action === "receiver-focus") {
@@ -872,11 +1184,12 @@ export function mountControl(host, client, page, changed = () => {}) {
         }
       }
       if (action === "autofix") {
+        routeVersion += 1;
         working = true;
         render();
         try {
           await autoFix(client);
-          await refresh();
+          await refreshAfterChange();
         } finally {
           working = false;
           render();
@@ -911,37 +1224,124 @@ export function mountControl(host, client, page, changed = () => {}) {
         working = false;
         render();
       }
-      if (action === "profile-add") profileEditor();
-      if (action === "profile-edit") profileEditor(profile);
-      if (action === "profile-delete")
-        await mutate(
-          "simple.delete",
-          { id },
-          `${t("Delete this profile and all its buttons? Existing sessions will lose access.")}\n${profile.name}`,
+      if (action === "profile-add") {
+        if (editingId) syncSimpleDraft();
+        startSimpleCreate();
+        return;
+      }
+      if (action === "profile-edit") {
+        if (editingId && editingId !== id) syncSimpleDraft();
+        startSimpleEdit(profile);
+        return;
+      }
+      if (action === "simple-cancel") {
+        cancelSimpleEdit();
+        return;
+      }
+      if (action === "simple-show") {
+        showPassword = !showPassword;
+        syncSimpleDraft();
+        lastMarkup = "";
+        render();
+        return;
+      }
+      if (action === "simple-add") {
+        syncSimpleDraft();
+        if (draft.actions.length < 10) draft.actions.push(blankSimpleAction());
+        lastMarkup = "";
+        render();
+        return;
+      }
+      if (action === "simple-remove") {
+        syncSimpleDraft();
+        const i = Number(x.dataset.index);
+        if (draft.actions.length > 1) draft.actions.splice(i, 1);
+        lastMarkup = "";
+        render();
+        return;
+      }
+      if (action === "simple-up" || action === "simple-down") {
+        syncSimpleDraft();
+        const i = Number(x.dataset.index);
+        const j = action === "simple-up" ? i - 1 : i + 1;
+        if (draft.actions[j]) {
+          [draft.actions[i], draft.actions[j]] = [draft.actions[j], draft.actions[i]];
+          lastMarkup = "";
+          render();
+        }
+        return;
+      }
+      if (action === "simple-save") {
+        try {
+          await saveSimpleEdit();
+        } catch (error) {
+          toast(error.message, "error");
+        }
+        lastMarkup = "";
+        render();
+        return;
+      }
+      if (action === "profile-delete") {
+        const ok = await confirmChange(
+          `${t("Delete")} “${profile?.name || ""}”?`,
+          "Its buttons are deleted too.",
+          async () => {},
         );
-      if (action === "profile-toggle")
-        await mutate(
-          "simple.update",
-          { id, enabled: !profile.enabled },
-          `${t(profile.enabled ? "Disable" : "Enable")} ${profile.name}?`,
-        );
+        if (!ok) return;
+        await mutate("simple.delete", { id }, `${t("Delete")} “${profile?.name || ""}”`);
+        if (editingId === id) {
+          editingId = null;
+          draft = null;
+        }
+        lastMarkup = "";
+        render();
+        return;
+      }
+      if (action === "profile-toggle") {
+        if (!profile) return;
+        working = true;
+        const task = beginTask("Simple Mode");
+        try {
+          await client.call("simple.update", {
+            id,
+            enabled: !profile.enabled,
+            confirmed: true,
+            expected_revision: data.info.revision,
+          });
+          lastMarkup = "";
+          await refresh();
+          await changed();
+          task.done();
+        } catch (error) {
+          task.fail(t(error.message));
+          throw error;
+        } finally {
+          working = false;
+        }
+        render();
+        return;
+      }
       if (["profile-up", "profile-down"].includes(action)) {
         const i = data.profiles.indexOf(profile),
           j = action === "profile-up" ? i - 1 : i + 1;
-        if (data.profiles[j])
-          await mutate(
-            "simple.update",
-            { id, order: j },
-            `${t("Reorder Simple Modes")}: ${profile.name} → ${j + 1}`,
-          );
-      }
-      if (action === "profile-preview") {
-        const d = editDialog(
-          "Preview",
-          `<h2 data-user-content>${e(profile.name)}</h2><div class="simple-grid">${profile.actions.map((a) => `<button type="button" disabled>${e(a.label)}</button>`).join("")}</div>`,
-          () => {},
-        );
-        d.querySelector(".dialog-footer").remove();
+        if (data.profiles[j]) {
+          working = true;
+          try {
+            await client.call("simple.update", {
+              id,
+              order: j,
+              confirmed: true,
+              expected_revision: data.info.revision,
+            });
+            lastMarkup = "";
+            await refresh();
+            await changed();
+          } finally {
+            working = false;
+          }
+          render();
+        }
+        return;
       }
       if (action === "event")
         await mutate(
@@ -963,12 +1363,17 @@ export function mountControl(host, client, page, changed = () => {}) {
     }
   };
   host.innerHTML = `<p class="loading-state" role="status"><span class="spinner" aria-hidden="true"></span>${t("Loading device state…")}</p>`;
-  void refresh().catch((error) => {
-    if (!disposed) {
-      host.textContent = "";
-      toast(error.message, "error", "control-error");
-    }
-  });
+  const initialTask = page === "Access Control" ? beginTask("Settings") : null;
+  initialTask?.step(0, t("Reading configuration"));
+  void refresh()
+    .then(() => initialTask?.done(t("Configuration loaded")))
+    .catch((error) => {
+      initialTask?.fail(t(error.message));
+      if (!disposed) {
+        host.textContent = "";
+        toast(error.message, "error", "control-error");
+      }
+    });
   // Header Event Mode changes update the revision used by an immediately opened editor.
   const receiveInfo = ({ detail: info }) => {
     if (
@@ -984,12 +1389,22 @@ export function mountControl(host, client, page, changed = () => {}) {
       data.event.enabled = info.event_mode;
     }
   };
+  const receiveRefresh = (event) => {
+    if (event.detail?.client === client && !working)
+      void refresh().catch(() => {});
+  };
+  document.addEventListener("drouter-controls-refresh", receiveRefresh);
   document.addEventListener("drouter-info", receiveInfo);
   document.addEventListener("drouter-language", render);
   const timer = setInterval(() => {
     if (
       !working &&
+      !host.querySelector("[data-source-select]:focus") &&
       !dialogs.size &&
+      host.getClientRects().length > 0 &&
+      (!document.querySelector("dialog[open]") ||
+        host.closest("dialog[open]") ===
+          [...document.querySelectorAll("dialog[open]")].at(-1)) &&
       !host.querySelector(".inline-editor") &&
       document.visibilityState === "visible"
     )
@@ -1006,9 +1421,14 @@ export function mountControl(host, client, page, changed = () => {}) {
     disposed = true;
     document.removeEventListener("drouter-language", render);
     document.removeEventListener("drouter-info", receiveInfo);
+    document.removeEventListener("drouter-controls-refresh", receiveRefresh);
     clearInterval(timer);
     dialogs.forEach((d) => d.close());
     host.onclick = null;
+    host.oninput = null;
+    host.onchange = null;
+    host.onkeydown = null;
+    host.onfocusout = null;
     host.onkeydown = null;
     host.oninput = null;
     host.onchange = null;
@@ -1099,6 +1519,10 @@ export function mountSimple(host, client, logout) {
     document.removeEventListener("drouter-language", render);
     clearInterval(timer);
     host.onclick = null;
+    host.oninput = null;
+    host.onchange = null;
+    host.onkeydown = null;
+    host.onfocusout = null;
   };
 }
 
@@ -1110,7 +1534,63 @@ function controlMarkup(data, page, state) {
     pendingRoute,
     arranging,
     focusedReceiver,
+    editingId,
+    draft,
+    showPassword,
   } = state;
+  const simpleSources = (selected) => {
+    const all = [
+      ...new Set([
+        ...data.saved.map((s) => s.source),
+        ...data.sources.map((s) => s.name),
+        selected,
+      ]),
+    ].filter(Boolean);
+    if (!all.length) return `<option value="">${t("No source")}</option>`;
+    return all
+      .map(
+        (s) =>
+          `<option value="${e(s)}" ${s === selected ? "selected" : ""}>${e(labelFor(data, s))}</option>`,
+      )
+      .join("");
+  };
+  const simpleForm = (isNew) => {
+    if (!draft) return "";
+    const isEdit = !isNew;
+    return `<div class="simple-edit" data-simple-form="${isNew ? "new" : e(editingId)}">
+      <div class="simple-edit-grid">
+        <label class="field"><span>${t("Name")}</span><input name="profile-name" value="${e(draft.name || "")}" maxlength="64" required autocomplete="off" data-focus="simple-name" placeholder="${t("Name")}"></label>
+        <label class="field"><span>${t("Password")}</span><span class="password-control"><input name="profile-password" type="${showPassword ? "text" : "password"}" autocomplete="new-password" ${isNew ? "required" : `placeholder="${e(t("Leave empty to keep the current password."))}"`} value="${e(draft.password || "")}" data-focus="simple-password" aria-label="${t("Password")}">${b(showPassword ? "Hide password" : "Show password", "simple-show", 'class="quiet"')}</span></label>
+      </div>
+      <div class="action-heading"><h3>${t("Button")}</h3><small>${draft.actions.length} / 10</small></div>
+      <div class="simple-action-list">${draft.actions
+        .map(
+          (a, i) => `<div class="action-mapping" data-button="${i}">
+          <span class="action-number">${i + 1}</span>
+          <input name="label" value="${e(a.label || "")}" maxlength="64" required placeholder="${t("Label")}" aria-label="${t("Label")}" data-focus="simple-label-${i}" autocomplete="off">
+          <select name="receiver" aria-label="${t("Output")}" data-focus="simple-recv-${i}" required>${data.receivers.map((r) => `<option value="${e(r.config.id)}" ${r.config.id === a.receiver ? "selected" : ""}>${e(r.config.label)}</option>`).join("")}</select>
+          <select name="source" aria-label="${t("Source")}" data-focus="simple-src-${i}" required>${simpleSources(a.source)}</select>
+          <div class="mapping-row-actions">${b("↑", "simple-up", `aria-label="${t("Move button up")}" data-index="${i}" ${i === 0 ? "disabled" : ""}`)}${b("↓", "simple-down", `aria-label="${t("Move button down")}" data-index="${i}" ${i === draft.actions.length - 1 ? "disabled" : ""}`)}${b("×", "simple-remove", `aria-label="${t("Remove button")}" data-index="${i}" ${draft.actions.length === 1 ? "disabled" : ""}`)}</div>
+        </div>`,
+        )
+        .join("")}</div>
+      <div class="form-actions simple-edit-actions">${b("+", "simple-add", `aria-label="${t("Add button")}" ${draft.actions.length >= 10 ? "disabled" : ""}`)}<span class="spacer"></span>${b("Cancel", "simple-cancel", 'class="quiet"')}<button type="button" data-control="simple-save" class="primary" ${working ? "disabled" : ""}>${t("Save")}</button></div>
+    </div>`;
+  };
+  const simpleRow = (p) => {
+    const isEditing = editingId === p.id && draft;
+    return `<div class="simple-item" data-profile="${e(p.id)}">
+      <div class="list-row simple-row">
+        <div class="list-main"><strong data-user-content>${e(p.name)}</strong><small>${p.actions.length} / 10</small></div>
+        <div class="row-actions">
+          <button type="button" data-control="profile-toggle" data-id="${e(p.id)}" class="event-toggle" role="switch" aria-label="${e(t("Enable") + " " + p.name)}" aria-checked="${p.enabled}"><span class="switch-track" aria-hidden="true"></span></button>
+          ${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}
+          ${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}
+        </div>
+      </div>
+      ${isEditing ? simpleForm(false) : ""}
+    </div>`;
+  };
   const pending = (r, source) =>
     pendingRoute?.receiver === r.config.id && pendingRoute?.source === source;
   const searchInput = (label, key, value) =>
@@ -1141,9 +1621,9 @@ function controlMarkup(data, page, state) {
     }</div>`;
   }
   if (page === "Simple Modes")
-    return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
+    return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div>${editingId === "new" && draft ? simpleForm(true) : ""}<div class="data-list profile-list">${data.profiles.map((p) => simpleRow(p)).join("") || empty("No Simple Modes configured")}</div>`;
   if (page === "Access Control")
-    return `<div class="access-heading"><div><h2>${t("Simple Mode")}</h2><p class="help-text">${t("A separate password and fixed routing buttons.")}</p></div>${b("Create Simple Mode", "profile-add")}</div><div class="data-list profile-list">${data.profiles.map((p) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong><small>${p.actions.length} / 10 ${t("Action buttons")}</small></div><div class="row-actions"><button type="button" data-control="profile-toggle" data-id="${e(p.id)}" class="event-toggle" role="switch" aria-label="${e(t("Enable") + " " + p.name)}" aria-checked="${p.enabled}"><span class="switch-track" aria-hidden="true"></span></button>${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
+    return `<div class="access-heading"><h2>${t("Simple Mode")}</h2>${editingId ? "" : b("+", "profile-add", `class="primary" aria-label="${t("Create Simple Mode")}"` )}</div>${editingId === "new" && draft ? simpleForm(true) : ""}<div class="data-list profile-list">${data.profiles.map((p) => simpleRow(p)).join("") || (editingId === "new" ? "" : empty("No Simple Modes configured"))}</div>`;
   if (page !== "Routing") return "";
   const receivers = data.receivers.filter((r) =>
     `${r.config.label} ${r.config.ip}`
@@ -1164,16 +1644,16 @@ function controlMarkup(data, page, state) {
     const active = r.state.source === source.source;
     const waiting = pending(r, source.source);
     return b(
-      `<span class="crosspoint-mark" aria-hidden="true">${waiting ? '<span class="spinner"></span>' : active ? check : '<span class="crosspoint-ring"></span>'}</span><span class="crosspoint-copy">${t(waiting ? "Switching…" : active ? "Active" : r.state.online ? "Switch" : "Offline")}</span>`,
+      `<span class="crosspoint-mark" aria-hidden="true">${waiting ? '<span class="spinner"></span>' : active ? check : '<span class="crosspoint-ring"></span>'}</span><span class="crosspoint-copy">${t(waiting ? "Switching…" : active ? "Active" : r.state.online ? "Switch" : "Retry switch")}</span>`,
       "route",
-      `class="crosspoint ${active ? "active" : ""} ${waiting ? "pending" : ""}" data-focus="matrix-${e(r.config.id)}-${e(source.id)}" data-row="${row}" data-col="${col}" data-id="${e(r.config.id)}" data-source="${e(source.source)}" aria-label="${e(t("Route {source} to {output}", { source: source.display_name, output: r.config.label }))}" aria-pressed="${active}" ${working || !r.state.online ? "disabled" : ""}`,
+      `class="crosspoint ${active ? "active" : ""} ${waiting ? "pending" : ""}" data-focus="matrix-${e(r.config.id)}-${e(source.id)}" data-row="${row}" data-col="${col}" data-id="${e(r.config.id)}" data-source="${e(source.source)}" aria-label="${e(t("Route {source} to {output}", { source: source.display_name, output: r.config.label }))}" aria-pressed="${active}" ${working ? "disabled" : ""}`,
     );
   };
   const sourceSelect = (r) => {
     const current = currentSource(r);
     const switching = pendingRoute?.receiver === r.config.id;
     const known = data.sources.some((source) => source.name === current);
-    return `<select class="matrix-picker" data-source-select data-id="${e(r.config.id)}" data-focus="ndi-source-${e(r.config.id)}" aria-label="${e(t("NDI source for {output}", { output: r.config.label }))}" ${working || !r.state.online || !data.sources.length ? "disabled" : ""}><option value="" disabled ${switching || !current ? "selected" : ""}>${t(switching ? "Switching…" : "Choose NDI source")}</option>${current && !known && !switching ? `<option data-user-content value="${e(current)}" selected disabled>${e(labelFor(data, current))} · ${t("Unavailable")}</option>` : ""}${data.sources
+    return `<select class="matrix-picker" data-source-select data-id="${e(r.config.id)}" data-focus="ndi-source-${e(r.config.id)}" aria-label="${e(t("NDI source for {output}", { output: r.config.label }))}" ${working || !data.sources.length ? "disabled" : ""}><option value="" disabled ${switching || !current ? "selected" : ""}>${t(switching ? "Switching…" : "Choose NDI source")}</option>${current && !known && !switching ? `<option data-user-content value="${e(current)}" selected disabled>${e(labelFor(data, current))} · ${t("Unavailable")}</option>` : ""}${data.sources
       .map((source) => {
         const alias = labelFor(data, source.name);
         return `<option data-user-content value="${e(source.name)}" ${!switching && source.name === current ? "selected" : ""}>${e(alias === source.name ? source.name : `${alias} · ${source.name}`)}</option>`;
@@ -1205,5 +1685,5 @@ function controlMarkup(data, page, state) {
     : !saved.length
       ? `<tr class="matrix-empty-row" data-key="empty-sources"><td colspan="${receivers.length + 1}"><p>${t(data.saved.length ? "No matching sources" : "No saved sources")}</p>${data.saved.length ? "" : b("+ Add source", "source-add", 'class="quiet"')}</td></tr>`
       : "";
-  return `<div class="routing-console"><div class="routing-tools">${searchInput("Find a source", "source", sourceSearch)}${searchInput("Find an output", "output", search)}<div class="routing-tool-actions">${b(arranging ? "Done" : "Reorder", "arrange", `class="${arranging ? "primary" : ""}" aria-pressed="${arranging}"`)}${b("Auto bugfix", "autofix", working ? "disabled" : "")}</div></div>${receiverTabs}<div class="matrix-frame"><div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><caption class="sr-only">${t("Transmitters are rows. Receivers are columns. Select a cell to switch.")}</caption><thead><tr><th scope="col" class="matrix-corner"><span>${t("Receiver")} <span aria-hidden="true">→</span></span><strong>${t("Transmitter")} <span aria-hidden="true">↓</span></strong></th>${receivers.map((r, col) => `<th scope="col" data-key="receiver-${e(r.config.id)}" class="receiver-column ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}><div class="receiver-header"><span class="matrix-index" aria-hidden="true">${String(data.receivers.indexOf(r) + 1).padStart(2, "0")}</span><strong title="${e(r.config.label)}" data-user-content>${e(r.config.label)}</strong>${edit("Edit receiver", "receiver-edit", r.config.id)}</div><span class="receiver-state"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span><div class="output-source" title="${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}"><span data-user-content>${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}</span></div>${receiverOrder(r)}</th>`).join("")}</tr></thead><tbody>${saved.map((source, row) => `<tr class="source-row" data-key="source-${e(source.id)}"><th scope="row"><div class="source-header"><span class="matrix-index" aria-hidden="true">${String(data.saved.indexOf(source) + 1).padStart(2, "0")}</span><div class="source-identity"><strong title="${e(source.display_name)}" data-user-content>${e(source.display_name)}</strong>${source.display_name !== source.source ? `<small title="${e(source.source)}" data-user-content>${e(source.source)}</small>` : ""}${data.sources.some((s) => s.name === source.source) ? "" : `<small class="unavailable-source">${t("Unavailable")}</small>`}</div>${edit("Edit source", "source-edit", source.id)}</div>${sourceOrder(source)}</th>${receivers.map((r, col) => `<td data-key="route-${e(r.config.id)}" class="route-cell ${r.state.source === source.source ? "route-active" : ""} ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}>${routeButton(r, source, row, col)}</td>`).join("")}</tr>`).join("")}${receivers.length ? emptyState : ""}<tr class="other-source" data-key="other-sources"><th scope="row"><strong>${t("Other device")}</strong><small>${t("All NDI sources")}</small></th>${receivers.map((r, col) => `<td data-key="other-${e(r.config.id)}" data-route-col="${col}" ${mobile(r)} class="${currentSource(r) && !data.saved.some((source) => source.source === currentSource(r)) ? "other-active" : ""}">${sourceSelect(r)}</td>`).join("")}</tr></tbody></table>${receivers.length ? "" : emptyState}</div><div class="matrix-bottom"><div class="matrix-add-actions">${b("+ Add source", "source-add")}${b("+ Add device", "receiver-add")}</div><span class="matrix-hint"><span class="legend-active" aria-hidden="true">${check}</span>${t("Verified active source")}</span></div></div></div>`;
+  return `<div class="routing-console"><div class="routing-tools">${searchInput("Find a source", "source", sourceSearch)}${searchInput("Find an output", "output", search)}<div class="routing-tool-actions">${b(arranging ? "Done" : "Reorder", "arrange", `class="${arranging ? "primary" : ""}" aria-pressed="${arranging}"`)}${b("Auto bugfix", "autofix", working ? "disabled" : "")}</div></div>${receiverTabs}<div class="matrix-frame"><div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><caption class="sr-only">${t("Transmitters are rows. Receivers are columns. Select a cell to switch.")}</caption><thead><tr><th scope="col" class="matrix-corner"><span>${t("Receiver")} <span aria-hidden="true">→</span></span><strong>${t("Transmitter")} <span aria-hidden="true">↓</span></strong></th>${receivers.map((r, col) => `<th scope="col" data-key="receiver-${e(r.config.id)}" class="receiver-column ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}><div class="receiver-header"><strong class="receiver-name" data-user-content>${e(r.config.label)}</strong>${edit("Edit receiver", "receiver-edit", r.config.id)}</div><span class="receiver-state"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span><div class="output-source"><small>${t(r.state.online ? "Current source" : "Last known")}</small><span data-user-content>${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}</span></div>${receiverOrder(r)}</th>`).join("")}</tr></thead><tbody>${saved.map((source, row) => `<tr class="source-row" data-key="source-${e(source.id)}"><th scope="row"><div class="source-header"><span class="matrix-index" aria-hidden="true">${String(data.saved.indexOf(source) + 1).padStart(2, "0")}</span><div class="source-identity"><strong data-user-content>${e(source.display_name)}</strong>${source.display_name !== source.source ? `<small title="${e(source.source)}" data-user-content>${e(source.source)}</small>` : ""}${data.sources.some((s) => s.name === source.source) ? "" : `<small class="unavailable-source">${t("Unavailable")}</small>`}</div>${edit("Edit source", "source-edit", source.id)}</div>${sourceOrder(source)}</th>${receivers.map((r, col) => `<td data-key="route-${e(r.config.id)}" class="route-cell ${r.state.source === source.source ? "route-active" : ""} ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}>${routeButton(r, source, row, col)}</td>`).join("")}</tr>`).join("")}${receivers.length ? emptyState : ""}<tr class="other-source" data-key="other-sources"><th scope="row"><strong>${t("Other device")}</strong><small>${t("All NDI sources")}</small>${b("NDI list reset", "ndi-reset", `class="quiet ndi-reset-button" ${working ? "disabled" : ""}`)}</th>${receivers.map((r, col) => `<td data-key="other-${e(r.config.id)}" data-route-col="${col}" ${mobile(r)} class="${currentSource(r) && !data.saved.some((source) => source.source === currentSource(r)) ? "other-active" : ""}">${sourceSelect(r)}</td>`).join("")}</tr></tbody></table>${receivers.length ? "" : emptyState}</div><div class="matrix-bottom"><div class="matrix-add-actions">${b("+ Add source", "source-add")}${b("+ Add device", "receiver-add")}</div><span class="matrix-hint"><span class="legend-active" aria-hidden="true">${check}</span>${t("Verified active source")}</span></div></div></div>`;
 }

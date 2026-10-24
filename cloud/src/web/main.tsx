@@ -1,5 +1,8 @@
 import {
   mountControl,
+  installActivity,
+  installSettingsSidebar,
+  beginTask,
   mountSimple,
   toggleEvent,
   toast,
@@ -51,15 +54,52 @@ function App() {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [restricted, setRestricted] = useState<DeviceClient | null>(null);
+  const [restoring, setRestoring] = useState(true);
   const [feedbackKind, setFeedbackKind] = useState("error");
   useFeedback(error, feedbackKind);
   const initialName = new URLSearchParams(location.search).get("device") || "";
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      const client = await Client.restore({ name: initialName });
+      if (disposed) {
+        client?.close();
+        return;
+      }
+      try {
+        if (client) {
+          const role = await client.call("auth.session");
+          if (role.role === "simple_mode") setRestricted(client);
+          else {
+            const data = await snapshot(client);
+            if (!disposed) setSession({ client, data });
+          }
+        }
+      } catch {
+        client?.close();
+      } finally {
+        if (!disposed) setRestoring(false);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, []);
   function disconnect(message = "", kind = "error") {
     dismissToast();
     if (session) {
       session.client.onDisconnect = () => {};
       session.client.close();
     }
+    if (restoring)
+      return (
+        <main className="auth-screen">
+          <p className="loading-state" role="status">
+            <Spinner />
+            Restoring session…
+          </p>
+        </main>
+      );
     if (restricted) {
       restricted.onDisconnect = () => {};
       restricted.close();
@@ -175,7 +215,12 @@ function Workspace({
     leave(message, kind);
   }
   async function refresh() {
-    const next = await snapshot(client);
+    const [info, health, network, wifi] = await Promise.all(
+      ["device.info", "device.health", "network.status", "wifi.list"].map(
+        (op) => client.call(op),
+      ),
+    );
+    const next = { ...data, info, health, network, wifi };
     setData(next);
     return next;
   }
@@ -205,12 +250,15 @@ function Workspace({
     setBusy(true);
     setError("");
     setMessage("");
+    const activity = beginTask("Settings");
     try {
       await task();
+      activity.done();
       if (ended.current) return;
       await refresh();
       if (close) setDialog(null);
     } catch (e) {
+      activity.fail((e as Error).message);
       if (ended.current) return;
       setError((e as Error).message);
       try {
@@ -427,7 +475,11 @@ function Workspace({
         </header>
         <SharedControl client={client} page="Routing" />
         {page === "Settings" && (
-          <Modal title="Settings" onClose={() => setPage("Routing")}>
+          <Modal
+            title="Settings"
+            onClose={() => setPage("Routing")}
+            onMount={(dialog) => installSettingsSidebar(dialog, client)}
+          >
             <div className="settings-single">
               <section className="settings-card">
                 <SharedControl client={client} page="Access Control" />
@@ -644,7 +696,7 @@ function Workspace({
                 </SettingRow>
                 <SettingRow
                   title="Active sessions"
-                  detail="Sessions expire automatically after 24 hours"
+                  detail="Sessions last 24 hours; settings access lasts 6 hours"
                 >
                   <Button
                     onClick={() =>
@@ -689,7 +741,11 @@ function Workspace({
                   <span className="mono">{data.health.errors}</span>
                 </SettingRow>
               </details>
-              <Button variant="quiet" onClick={() => logout()}>
+              <Button
+                className="settings-logout-action"
+                variant="quiet"
+                onClick={() => logout()}
+              >
                 <LogOut />
                 Disconnect
               </Button>
@@ -770,3 +826,4 @@ function SimpleScreen({
   return <div ref={ref} />;
 }
 installLocalization();
+installActivity();

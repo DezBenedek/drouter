@@ -273,6 +273,11 @@ impl Device {
         self.commit(c.clone())?;
         if password_changed {
             self.auth.revoke_profile(&id);
+        } else if r.op == "simple.delete"
+            || (r.op == "simple.update"
+                && c.simple_profiles.iter().any(|p| p.id == id && !p.enabled))
+        {
+            self.auth.revoke_resume_profile(&id);
         }
         if r.op.starts_with("event.")
             || r.op.starts_with("simple.")

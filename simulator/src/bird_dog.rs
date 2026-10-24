@@ -22,9 +22,20 @@ use std::{
 pub struct VirtualReceiver {
     pub active: String,
     pub sources: Vec<String>,
+    pub stale_sources: Vec<String>,
+    pub resets: u32,
+    pub restarts: u32,
+    pub reboots: u32,
     pub online: bool,
     pub ignore_switch: bool,
     pub delay_ms: u64,
+    pub active_failures: u32,
+    pub list_failures: u32,
+    pub refresh_failures: u32,
+    pub switch_failures: u32,
+    pub lag_reads: u32,
+    pub pending_source: Option<(String, u32)>,
+    pub forget_route_on_reset: bool,
 }
 impl Default for VirtualReceiver {
     fn default() -> Self {
@@ -35,9 +46,20 @@ impl Default for VirtualReceiver {
                 "Studio (Camera B)".into(),
                 "Graphics (Program)".into(),
             ],
+            stale_sources: vec![],
+            resets: 0,
+            restarts: 0,
+            reboots: 0,
             online: true,
             ignore_switch: false,
             delay_ms: 0,
+            active_failures: 0,
+            list_failures: 0,
+            refresh_failures: 0,
+            switch_failures: 0,
+            lag_reads: 0,
+            pending_source: None,
+            forget_route_on_reset: false,
         }
     }
 }
@@ -57,6 +79,9 @@ pub async fn serve(port: u16, state: Virtual) -> Result<()> {
         .route("/List", get(sources))
         .route("/connectTo", get(active).post(switch))
         .route("/refresh", post(refresh))
+        .route("/reset", post(reset_sources))
+        .route("/restart", post(restart))
+        .route("/reboot", post(reboot))
         .with_state(state);
     axum::serve(
         tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?,
@@ -82,16 +107,35 @@ async fn about(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
     ))
 }
 async fn sources(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
-    let s = check(&s).await?;
+    check(&s).await?;
+    let mut s = s.lock().unwrap();
+    if s.list_failures > 0 {
+        s.list_failures -= 1;
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let s = s.clone();
     let list: serde_json::Map<String, Value> = s
         .sources
         .into_iter()
+        .chain(s.stale_sources)
         .map(|name| (name, json!("127.0.0.1")))
         .collect();
     Ok(Json(json!(list)))
 }
 async fn active(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
-    let s = check(&s).await?;
+    check(&s).await?;
+    let mut s = s.lock().unwrap();
+    if s.active_failures > 0 {
+        s.active_failures -= 1;
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if let Some((source, remaining)) = s.pending_source.take() {
+        if remaining == 0 {
+            s.active = source;
+        } else {
+            s.pending_source = Some((source, remaining - 1));
+        }
+    }
     Ok(Json(json!({"sourceName":s.active})))
 }
 async fn switch(
@@ -107,14 +151,50 @@ async fn switch(
     if !current.sources.iter().any(|n| n == source) {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let mut state = s.lock().unwrap();
+    if state.switch_failures > 0 {
+        state.switch_failures -= 1;
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     if !current.ignore_switch {
-        s.lock().unwrap().active = source.into();
+        if state.lag_reads > 0 {
+            let lag = state.lag_reads;
+            state.pending_source = Some((source.into(), lag));
+        } else {
+            state.active = source.into();
+        }
     }
     Ok(Json(json!({"sourceName":source})))
 }
 async fn refresh(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
     check(&s).await?;
+    let mut s = s.lock().unwrap();
+    if s.refresh_failures > 0 {
+        s.refresh_failures -= 1;
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
     Ok(Json(json!({"refreshed":true})))
+}
+async fn reset_sources(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
+    check(&s).await?;
+    let mut state = s.lock().unwrap();
+    state.stale_sources.clear();
+    state.resets += 1;
+    if state.forget_route_on_reset {
+        state.active.clear();
+        state.pending_source = None;
+    }
+    Ok(Json(json!({})))
+}
+async fn restart(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
+    check(&s).await?;
+    s.lock().unwrap().restarts += 1;
+    Ok(Json(json!({})))
+}
+async fn reboot(State(s): State<Virtual>) -> Result<Json<Value>, StatusCode> {
+    check(&s).await?;
+    s.lock().unwrap().reboots += 1;
+    Ok(Json(json!({})))
 }
 pub struct HttpBirdDog {
     pub deadline: std::time::Instant,

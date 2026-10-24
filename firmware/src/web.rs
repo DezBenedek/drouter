@@ -4,7 +4,9 @@ use crate::{
     config::*,
     discovery,
     network::NetworkState,
-    presets, routing,
+    presets,
+    repair::RepairJob,
+    routing,
     storage::Storage,
 };
 use anyhow::{bail, Result};
@@ -28,6 +30,22 @@ struct Empty {}
 #[serde(deny_unknown_fields)]
 struct Id {
     id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepairRequest {
+    id: String,
+    #[serde(default)]
+    staged: bool,
+    token: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BirdDogTarget {
+    id: Option<String>,
+    ip: Option<std::net::Ipv4Addr>,
+    port: Option<u16>,
+    confirmed: Option<bool>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,6 +135,7 @@ pub struct Device {
     pub errors: u64,
     pub allow_dev: bool,
     pub last_simple_action: std::collections::BTreeMap<String, Instant>,
+    repair_jobs: std::collections::BTreeMap<String, RepairJob>,
     pub access_log: std::collections::VecDeque<Value>,
 }
 impl Device {
@@ -147,6 +166,7 @@ impl Device {
             allow_dev,
             last_simple_action: Default::default(),
             access_log: Default::default(),
+            repair_jobs: Default::default(),
         })
     }
     pub fn now(&self) -> u64 {
@@ -231,6 +251,17 @@ impl Device {
                         .prove(sid, frame["proof"].as_str().unwrap_or(""), now)
                 }
             }
+            Some("auth.resume.start") => {
+                let ticket = frame["ticket"]
+                    .as_str()
+                    .filter(|id| id.len() == 32 && id.bytes().all(|c| c.is_ascii_hexdigit()))
+                    .ok_or_else(|| anyhow::anyhow!("Invalid resume ticket"))?;
+                self.auth.resume_start(sid, ticket, now)
+            }
+            Some("auth.resume.proof") => {
+                self.auth
+                    .resume_prove(sid, frame["proof"].as_str().unwrap_or(""), now)
+            }
             Some("rpc") => {
                 let request = self.auth.decrypt(sid, &frame, now)?;
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
@@ -265,6 +296,9 @@ impl Device {
                 };
                 let encrypted = self.auth.encrypt(sid, &reply)?;
                 if reply["ok"] == true && reply["result"]["logout"] == true {
+                    self.auth.logout(sid);
+                }
+                if reply["ok"] == true && reply["result"]["detached"] == true {
                     self.auth.remove(sid);
                 }
                 if reply["ok"] == true && reply["result"]["reauthenticate"] == true {
@@ -275,26 +309,102 @@ impl Device {
             _ => bail!("Unknown frame"),
         }
     }
-    // Refresh only the selected decoder, then verify the route read before refresh.
-    // Restricted sessions may restore only a route explicitly allowed by their profile.
+    fn bird_target(&self, target: &BirdDogTarget, config: &Config) -> Result<Receiver> {
+        match (&target.id, target.ip) {
+            (Some(id), None) if target.port.is_none() => config
+                .receivers
+                .iter()
+                .find(|r| &r.id == id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Unknown receiver")),
+            (None, Some(ip))
+                if (ip.is_private()
+                    || ip.is_link_local()
+                    || self.allow_dev && ip.is_loopback())
+                    && target.port.unwrap_or(8080) > 0 =>
+            {
+                Ok(Receiver {
+                    id: "inspected-birddog".into(),
+                    label: "BirdDog".into(),
+                    ip,
+                    port: target.port.unwrap_or(8080),
+                    channel: 1,
+                })
+            }
+            _ => bail!("invalid_request: Select a registered device or a private IPv4 address"),
+        }
+    }
     fn repair_receiver(
         &mut self,
-        receiver: &Receiver,
+        request: RepairRequest,
+        owner: &str,
         allowed: Option<&[String]>,
     ) -> Result<Value> {
+        self.last_operation = Instant::now();
+        let now = self.now();
+        self.repair_jobs.retain(|_, job| {
+            job.updated.elapsed().as_secs() < 120
+                && (job.owner == "direct" || self.auth.role(&job.owner, now).is_ok())
+        });
+        let receiver = self
+            .config
+            .as_ref()
+            .unwrap()
+            .receivers
+            .iter()
+            .find(|r| r.id == request.id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Unknown receiver"))?;
+        if let Some(token) = request.token {
+            let job = self.repair_jobs.get(&token).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Repair expired or was cancelled by a newer route. Run Auto bugfix again."
+                )
+            })?;
+            if job.owner != owner || job.receiver.id != request.id {
+                bail!("forbidden: Repair belongs to another session or receiver");
+            }
+            let mut job = self.repair_jobs.remove(&token).unwrap();
+            if serde_json::to_value(&receiver)? != serde_json::to_value(&job.receiver)? {
+                bail!("Receiver configuration changed. Run Auto bugfix again.");
+            }
+            self.api.begin_operation();
+            job.advance(&mut *self.api, allowed)?;
+            let result = job.status(&token);
+            if !job.done() {
+                self.repair_jobs.insert(token, job);
+            }
+            return Ok(result);
+        }
+        self.repair_jobs
+            .retain(|_, job| !(job.owner == owner && job.receiver.id == request.id));
+        if self
+            .repair_jobs
+            .values()
+            .any(|job| job.receiver.id == request.id)
+        {
+            bail!("Auto bugfix is already running for this receiver");
+        }
+        if self.repair_jobs.len() >= 8 {
+            bail!("Too many active repairs. Try again shortly.");
+        }
+        let mut job = RepairJob::new(owner, receiver);
+        if request.staged {
+            let token = drouter_auth::random_hex(16);
+            let result = job.status(&token);
+            self.repair_jobs.insert(token, job);
+            return Ok(result);
+        }
+        // Legacy single-call repair remains bounded by the adapter's existing operation deadline.
         self.api.begin_operation();
-        let source = self.api.active(receiver)?;
-        if allowed.is_some_and(|sources| !sources.contains(&source)) {
-            bail!("forbidden: Current source is not assigned to this profile");
+        while !job.done() {
+            job.advance(&mut *self.api, allowed)?;
         }
-        self.api.sources(receiver, true)?;
-        let restore = !source.is_empty();
-        if restore {
-            routing::set(&mut *self.api, receiver, &source)?;
-        } else {
-            self.api.active(receiver)?;
-        }
-        Ok(json!({"receiver":receiver.id,"refreshed":true,"restored":restore}))
+        Ok(job.status(""))
+    }
+    fn cancel_repairs(&mut self, receiver: &str) {
+        self.repair_jobs
+            .retain(|_, job| job.receiver.id != receiver);
     }
     fn execute_session(&mut self, sid: &str, r: Request, remote: bool) -> Result<Value> {
         let now = self.now();
@@ -305,6 +415,26 @@ impl Device {
         if r.op == "auth.session" || r.op == "auth.login" {
             let _: Empty = parse(&r.params)?;
             return Ok(serde_json::to_value(role)?);
+        }
+        if r.op == "auth.resume.create" {
+            let _: Empty = parse(&r.params)?;
+            if let Role::SimpleMode { ref profile_id } = role {
+                if !self
+                    .config
+                    .as_ref()
+                    .unwrap()
+                    .simple_profiles
+                    .iter()
+                    .any(|p| &p.id == profile_id && p.enabled)
+                {
+                    bail!("forbidden: Profile disabled or removed");
+                }
+            }
+            return self.auth.issue_resume(sid, now);
+        }
+        if r.op == "auth.detach" {
+            let _: Empty = parse(&r.params)?;
+            return Ok(json!({"detached":true}));
         }
         if r.op == "auth.logout" {
             let _: Empty = parse(&r.params)?;
@@ -334,7 +464,7 @@ impl Device {
                 if c.event_mode {
                     bail!("event_locked: Simple Mode is temporarily locked by the administrator");
                 }
-                let id: Id = parse(&r.params)?;
+                let id: RepairRequest = parse(&r.params)?;
                 let allowed: Vec<String> = profile
                     .actions
                     .iter()
@@ -344,27 +474,26 @@ impl Device {
                 if allowed.is_empty() {
                     bail!("forbidden: Output is not available to this profile");
                 }
-                let receiver = c
-                    .receivers
-                    .iter()
-                    .find(|r| r.id == id.id)
-                    .ok_or_else(|| anyhow::anyhow!("invalid_target: Output removed"))?
-                    .clone();
+                if !c.receivers.iter().any(|r| r.id == id.id) {
+                    bail!("invalid_target: Output removed");
+                }
                 let key = format!("{}:repair:{}", profile_id, id.id);
-                if self
-                    .last_simple_action
-                    .get(&key)
-                    .is_some_and(|t| t.elapsed().as_secs() < 2)
-                {
-                    bail!("rate_limited: Wait before repeating this action");
+                if id.token.is_none() {
+                    if self
+                        .last_simple_action
+                        .get(&key)
+                        .is_some_and(|t| t.elapsed().as_secs() < 2)
+                    {
+                        bail!("rate_limited: Wait before repeating this action");
+                    }
+                    self.last_simple_action
+                        .retain(|_, t| t.elapsed().as_secs() < 2);
+                    if self.last_simple_action.len() >= 80 {
+                        bail!("rate_limited: Action capacity reached");
+                    }
+                    self.last_simple_action.insert(key, Instant::now());
                 }
-                self.last_simple_action
-                    .retain(|_, t| t.elapsed().as_secs() < 2);
-                if self.last_simple_action.len() >= 80 {
-                    bail!("rate_limited: Action capacity reached");
-                }
-                self.last_simple_action.insert(key, Instant::now());
-                return self.repair_receiver(&receiver, Some(&allowed));
+                return self.repair_receiver(id, sid, Some(&allowed));
             }
             if r.op != "simple.action.execute" {
                 bail!("forbidden: Administrator access required");
@@ -401,8 +530,13 @@ impl Device {
                 bail!("rate_limited: Action capacity reached");
             }
             self.last_simple_action.insert(key, Instant::now());
+            self.cancel_repairs(&receiver.id);
             self.api.begin_operation();
             return Ok(json!(routing::set(&mut *self.api, &receiver, &source)?));
+        }
+        if r.op == "route.repair" {
+            let request: RepairRequest = parse(&r.params)?;
+            return self.repair_receiver(request, sid, None);
         }
         self.execute(r, self.auth.elevated(sid, now), remote)
     }
@@ -570,6 +704,41 @@ impl Device {
                 self.network.wifi.request(w.id);
                 Ok(json!({"scheduled":true}))
             }
+            "birddog.info"
+            | "birddog.sources"
+            | "birddog.sources.reset"
+            | "birddog.sources.refresh"
+            | "birddog.restart"
+            | "birddog.reboot" => {
+                let target: BirdDogTarget = parse(p)?;
+                let receiver = self.bird_target(&target, &c)?;
+                let about = self.api.about(&receiver)?;
+                match r.op.as_str() {
+                    "birddog.info" => Ok(json!({"config":receiver,"about":about})),
+                    "birddog.sources" => Ok(json!({"sources":self.api.sources(&receiver, false)?})),
+                    "birddog.sources.reset" => {
+                        Ok(json!({"sources":self.api.reset_sources(&receiver)?,"reset":true}))
+                    }
+                    "birddog.sources.refresh" => {
+                        Ok(json!({"sources":self.api.sources(&receiver, true)?}))
+                    }
+                    _ => {
+                        if target.confirmed != Some(true) {
+                            bail!("confirmation_required: Confirm the device restart");
+                        }
+                        if !elevated {
+                            bail!("Reconnect to authorize this sensitive operation");
+                        }
+                        let path = if r.op == "birddog.reboot" {
+                            "/reboot"
+                        } else {
+                            "/restart"
+                        };
+                        self.api.request(&receiver, "POST", path, Some(json!({})))?;
+                        Ok(json!({"scheduled":true}))
+                    }
+                }
+            }
             "receivers.list" => {
                 let _: Empty = parse(p)?;
                 Ok(json!(c.receivers.iter().map(|r| json!({"config":r,"state":routing::read(&mut *self.api,r),"capabilities":["api2","decode","sources"]})).collect::<Vec<_>>()))
@@ -617,14 +786,8 @@ impl Device {
                 Ok(json!({"saved":true}))
             }
             "route.repair" => {
-                let id: Id = parse(p)?;
-                let receiver = c
-                    .receivers
-                    .iter()
-                    .find(|r| r.id == id.id)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown receiver"))?
-                    .clone();
-                self.repair_receiver(&receiver, None)
+                let request: RepairRequest = parse(p)?;
+                self.repair_receiver(request, "direct", None)
             }
             "receivers.rename" => {
                 let n: Rename = parse(p)?;
@@ -653,7 +816,9 @@ impl Device {
                     match self.api.sources(receiver, refresh) {
                         Ok(found) => {
                             for source in found {
-                                if !sources.contains(&source) {
+                                if !sources.iter().any(|existing: &crate::bird_dog::Source| {
+                                    existing.name == source.name
+                                }) {
                                     if sources.len() >= MAX_SOURCES {
                                         bail!("Source capacity exceeded");
                                     }
@@ -684,6 +849,7 @@ impl Device {
             }
             "route.set" => {
                 let route: Route = parse(p)?;
+                self.cancel_repairs(&route.receiver);
                 let receiver = c
                     .receivers
                     .iter()
@@ -735,6 +901,7 @@ impl Device {
             }
             "presets.apply" => {
                 let n: Id = parse(p)?;
+                self.repair_jobs.clear();
                 let preset = c
                     .presets
                     .iter()

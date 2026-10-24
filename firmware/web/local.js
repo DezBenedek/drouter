@@ -1,5 +1,8 @@
 import {
   mountControl,
+  installActivity,
+  installSettingsSidebar,
+  beginTask,
   mountSimple,
   toggleEvent,
   eventControl,
@@ -95,38 +98,32 @@ function modal(
 async function refresh() {
   if (!client) return;
   const values = await Promise.all(
-    [
-      "device.info",
-      "device.health",
-      "network.status",
-      "receivers.list",
-      "sources.list",
-      "wifi.list",
-    ].map((op) => client.call(op)),
+    ["device.info", "device.health", "network.status", "wifi.list"].map((op) =>
+      client.call(op),
+    ),
   );
   data = {
     info: values[0],
     health: values[1],
     network: values[2],
-    receivers: values[3],
-    sources: values[4].sources,
-    sourceErrors: values[4].errors,
-    wifi: values[5],
+    wifi: values[3],
   };
 }
 async function run(task, close = false) {
   if (busy) return;
   busy = true;
   failure = "";
-  render();
   const current = dialog;
+  const activity = beginTask("Settings");
   current?.querySelectorAll("button").forEach((b) => (b.disabled = true));
   try {
     await task();
+    activity.done();
     if (client) await refresh();
     if (close && dialog === current) closeDialog();
   } catch (e) {
     failure = e.message;
+    activity.fail(e.message);
     try {
       if (client) await refresh();
     } catch {}
@@ -160,8 +157,8 @@ function logout(text = "", kind = "error") {
   closeDialog();
   login(text, kind);
 }
-async function connect(p) {
-  client = await new Client().open("", p, false);
+async function acceptClient(next) {
+  client = next;
   client.onDisconnect = () =>
     logout("Device unavailable or session expired. Connect again.");
   const session = await client.call("auth.session");
@@ -171,6 +168,9 @@ async function connect(p) {
   }
   await refresh();
   render();
+}
+async function connect(p) {
+  return acceptClient(await new Client().open("", p, false));
 }
 function login(error = "", kind = "error") {
   if (error) toast(error, kind, "login-error");
@@ -273,6 +273,7 @@ function render() {
   let content = "";
   if (page === "Settings") {
     content = `<div class="page-body settings-single">
+      <section class="settings-card"><div id="access-host"></div></section>
       <section class="settings-card" aria-label="Device"><h2>Device</h2>
         ${row("Device name", `<span class="inline-actions">${esc(i.name)}${button("Change", "change-name")}</span>`, "Also used for remote login")}
       </section>
@@ -292,7 +293,7 @@ function render() {
       </details>
       <details class="settings-card"><summary>Security</summary>
         ${row("Administrator password", button("Change", "change-password"), "Verified only on this device")}
-        ${row("Active sessions", button("Revoke all", "revoke"), "Sessions expire after 24 hours")}
+        ${row("Active sessions", button("Revoke all", "revoke"), "Sessions last 24 hours; settings access lasts 6 hours")}
         ${row("Identity recovery", button("Export recovery file", "identity-export"), "Keep the file private.")}
         ${row("Restore an identity", button("Restore…", "identity-restore"), "Requires your recovery file and a new password")}
       </details>
@@ -305,7 +306,7 @@ function render() {
       </details>
     </div>`;
   }
-  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1></div></header><div class="page-body" id="control-host"></div></main>${page === "Settings" ? `<dialog class="dialog settings-dialog" id="settings-dialog" aria-label="Settings"><header class="dialog-header"><h2>Settings</h2>${button("×", "settings-close", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body"><section class="settings-card"><div id="access-host"></div></section>${content}${button("Disconnect", "logout", 'class="quiet"')}</div></dialog>` : ""}</div>`;
+  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1></div></header><div class="page-body" id="control-host"></div></main>${page === "Settings" ? `<dialog class="dialog settings-dialog" id="settings-dialog" aria-label="Settings"><header class="dialog-header"><h2>Settings</h2>${button("×", "settings-close", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body">${content}${button("Disconnect", "logout", 'class="quiet"')}</div></dialog>` : ""}</div>`;
   const cleanups = [
     mountControl(
       root.querySelector("#control-host"),
@@ -326,6 +327,7 @@ function render() {
     );
     const settingsDialog = root.querySelector("#settings-dialog");
     settingsDialog.showModal();
+    cleanups.push(installSettingsSidebar(settingsDialog, client));
     settingsDialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       page = "Routing";
@@ -658,6 +660,12 @@ setInterval(() => {
     document.visibilityState !== "visible"
   )
     return;
+  if (
+    ![
+      ...root.querySelectorAll("[data-cloud-status], [data-ethernet-status]"),
+    ].some((el) => el.getClientRects().length)
+  )
+    return;
   const session = client;
   void session
     .call("network.status")
@@ -690,11 +698,23 @@ setInterval(() => {
 }, 10000);
 fetch("/bootstrap")
   .then((r) => r.json())
-  .then((b) => (b.setup ? setup() : login()))
+  .then(async (b) => {
+    if (b.setup) return setup();
+    root.innerHTML =
+      '<p class="loading-state" role="status">Restoring session…</p>';
+    const resumed = await Client.restore({ remote: false });
+    if (!resumed) return login();
+    try {
+      await acceptClient(resumed);
+    } catch {
+      resumed.close();
+      client = null;
+      login();
+    }
+  })
   .catch((e) => {
     root.textContent = e.message;
   });
 
 installLocalization();
-
-window.addEventListener("pagehide", () => client?.close());
+installActivity();
