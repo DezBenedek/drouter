@@ -275,6 +275,27 @@ impl Device {
             _ => bail!("Unknown frame"),
         }
     }
+    // Refresh only the selected decoder, then verify the route read before refresh.
+    // Restricted sessions may restore only a route explicitly allowed by their profile.
+    fn repair_receiver(
+        &mut self,
+        receiver: &Receiver,
+        allowed: Option<&[String]>,
+    ) -> Result<Value> {
+        self.api.begin_operation();
+        let source = self.api.active(receiver)?;
+        if allowed.is_some_and(|sources| !sources.contains(&source)) {
+            bail!("forbidden: Current source is not assigned to this profile");
+        }
+        self.api.sources(receiver, true)?;
+        let restore = !source.is_empty();
+        if restore {
+            routing::set(&mut *self.api, receiver, &source)?;
+        } else {
+            self.api.active(receiver)?;
+        }
+        Ok(json!({"receiver":receiver.id,"refreshed":true,"restored":restore}))
+    }
     fn execute_session(&mut self, sid: &str, r: Request, remote: bool) -> Result<Value> {
         let now = self.now();
         let role = self.auth.role(sid, now)?;
@@ -308,6 +329,42 @@ impl Device {
                 return Ok(
                     json!({"id":profile.id,"name":profile.name,"description":profile.description,"locked":c.event_mode,"actions":profile.actions.iter().filter(|a| a.enabled).collect::<Vec<_>>()}),
                 );
+            }
+            if r.op == "simple.repair" {
+                if c.event_mode {
+                    bail!("event_locked: Simple Mode is temporarily locked by the administrator");
+                }
+                let id: Id = parse(&r.params)?;
+                let allowed: Vec<String> = profile
+                    .actions
+                    .iter()
+                    .filter(|a| a.enabled && a.receiver == id.id)
+                    .map(|a| a.source.clone())
+                    .collect();
+                if allowed.is_empty() {
+                    bail!("forbidden: Output is not available to this profile");
+                }
+                let receiver = c
+                    .receivers
+                    .iter()
+                    .find(|r| r.id == id.id)
+                    .ok_or_else(|| anyhow::anyhow!("invalid_target: Output removed"))?
+                    .clone();
+                let key = format!("{}:repair:{}", profile_id, id.id);
+                if self
+                    .last_simple_action
+                    .get(&key)
+                    .is_some_and(|t| t.elapsed().as_secs() < 2)
+                {
+                    bail!("rate_limited: Wait before repeating this action");
+                }
+                self.last_simple_action
+                    .retain(|_, t| t.elapsed().as_secs() < 2);
+                if self.last_simple_action.len() >= 80 {
+                    bail!("rate_limited: Action capacity reached");
+                }
+                self.last_simple_action.insert(key, Instant::now());
+                return self.repair_receiver(&receiver, Some(&allowed));
             }
             if r.op != "simple.action.execute" {
                 bail!("forbidden: Administrator access required");
@@ -542,6 +599,32 @@ impl Device {
                 }
                 self.commit(c)?;
                 Ok(json!({"saved":true}))
+            }
+            "receivers.reorder" => {
+                let order: Order = parse(p)?;
+                let mut ids = order.ids.clone();
+                ids.sort();
+                ids.dedup();
+                if ids.len() != c.receivers.len()
+                    || order.ids.len() != c.receivers.len()
+                    || !ids.iter().all(|id| c.receivers.iter().any(|r| &r.id == id))
+                {
+                    bail!("Provide each receiver ID exactly once");
+                }
+                c.receivers
+                    .sort_by_key(|r| order.ids.iter().position(|id| id == &r.id).unwrap());
+                self.commit(c)?;
+                Ok(json!({"saved":true}))
+            }
+            "route.repair" => {
+                let id: Id = parse(p)?;
+                let receiver = c
+                    .receivers
+                    .iter()
+                    .find(|r| r.id == id.id)
+                    .ok_or_else(|| anyhow::anyhow!("Unknown receiver"))?
+                    .clone();
+                self.repair_receiver(&receiver, None)
             }
             "receivers.rename" => {
                 let n: Rename = parse(p)?;

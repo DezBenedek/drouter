@@ -1147,6 +1147,59 @@ try {
   preferred = localStorage.getItem("drouter-language") || "en";
 } catch {}
 if (!["en", "hu"].includes(preferred)) preferred = "en";
+Object.assign(dictionaries.hu, {
+  "+ Add button": "+ Gomb hozzáadása",
+  "NDI source": "NDI-forrás",
+  "Add source": "Forrás hozzáadása",
+  "+ Add source": "+ Forrás hozzáadása",
+  "Add device": "Eszköz hozzáadása",
+  "+ Add device": "+ Eszköz hozzáadása",
+  "Other device": "Más eszköz",
+  "All NDI sources": "Összes NDI-forrás",
+  "Choose NDI source": "NDI-forrás kiválasztása",
+  "NDI source for {output}": "NDI-forrás ehhez: {output}",
+  Active: "Aktív",
+  Switch: "Kapcsolás",
+  "Choose receiver": "Vevő kiválasztása",
+  "Choose source": "Adó kiválasztása",
+  "Show receiver {output}": "Vevő megjelenítése: {output}",
+  "Move left": "Balra mozgatás",
+  "Move right": "Jobbra mozgatás",
+  "Choose any discovered source": "Válassz a hálózaton talált adók közül",
+  "Transmitters are rows. Receivers are columns. Select a cell to switch.":
+    "A sorok az adók, az oszlopok a vevők. A kapcsoláshoz válassz egy cellát.",
+  "Current source is not assigned to this profile":
+    "Az aktuális adó nincs ehhez az egyszerűsített módhoz rendelve",
+  "Add row": "Sor hozzáadása",
+  "+ Add row": "+ Sor hozzáadása",
+  "Add column": "Oszlop hozzáadása",
+  "+ Add column": "+ Oszlop hozzáadása",
+  Reorder: "Sorrend",
+  Receiver: "Vevő",
+  Transmitter: "Adó",
+  "Edit receiver": "Vevő szerkesztése",
+  "Edit source": "Adó szerkesztése",
+  "Discover receivers": "Vevők keresése",
+  "Verified active source": "Ellenőrzött aktív kapcsolat",
+  "Add a receiver and a source to start routing.":
+    "Adj hozzá egy vevőt és egy adót a kapcsoláshoz.",
+  "A separate password and fixed routing buttons.":
+    "Külön jelszó és előre beállított kapcsológombok.",
+  "Sign in with this separate password to use the fixed buttons.":
+    "Ezzel a külön jelszóval lehet belépni a fix gombokhoz. A jelszó 4–128 karakter legyen.",
+  "Enter your password.": "Add meg a jelszavad.",
+  "No receivers to check.": "Nincs ellenőrizhető vevő.",
+  "Auto bugfix running…": "Auto bugfix folyamatban…",
+  "Auto bugfix complete. Routes verified.":
+    "Auto bugfix kész. A kapcsolások ellenőrizve.",
+  "Some receivers could not be repaired.":
+    "Néhány vevőt nem sikerült helyreállítani.",
+  "Provide each receiver ID exactly once":
+    "Minden vevő pontosan egyszer szerepeljen a sorrendben",
+  "Output is not available to this profile":
+    "Ez a vevő nem érhető el ebben az egyszerűsített módban",
+});
+for (const key of Object.keys(dictionaries.hu)) dictionaries.en[key] ??= key;
 const englishByHungarian = Object.fromEntries(
   Object.entries(dictionaries.hu).map(([key, value]) => [value, key]),
 );
@@ -1235,15 +1288,15 @@ export function installLocalization() {
   let scheduled = false;
   const update = () => {
     scheduled = false;
+    for (const host of document.querySelectorAll("[data-language-host]")) {
+      if (!host.querySelector("[data-language]"))
+        host.innerHTML = languageControl();
+    }
     if (!document.querySelector("[data-language]")) {
       const target = document.querySelector(
         ".auth-brand,.topbar-actions,.simple-screen header",
       );
       if (target) target.insertAdjacentHTML("beforeend", languageControl());
-    }
-    for (const host of document.querySelectorAll("[data-language-host]")) {
-      if (!host.querySelector("[data-language]"))
-        host.innerHTML = languageControl();
     }
     localize(document.body);
   };

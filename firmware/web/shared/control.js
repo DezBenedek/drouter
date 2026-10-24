@@ -240,7 +240,39 @@ export async function toggleEvent(client) {
 export function eventControl(enabled) {
   return `<button type="button" class="event-toggle" data-action="event-toggle" role="switch" aria-checked="${!!enabled}" aria-label="${t("Event Mode")}"><span>${t("Event Mode")}</span><span class="switch-track" aria-hidden="true"></span></button>`;
 }
+export async function autoFix(client, actions = null) {
+  const receivers = actions
+    ? [
+        ...new Map(
+          actions.map((a) => [a.receiver, { id: a.receiver, label: a.label }]),
+        ).values(),
+      ]
+    : (await client.call("receivers.list")).map((r) => r.config);
+  if (!receivers.length) {
+    toast("No receivers to check.");
+    return;
+  }
+  const failures = [];
+  toast("Auto bugfix running…", "loading", "autofix");
+  for (const receiver of receivers) {
+    try {
+      await client.call(actions ? "simple.repair" : "route.repair", {
+        id: receiver.id,
+      });
+    } catch (error) {
+      failures.push(`${receiver.label}: ${t(error.message)}`);
+    }
+  }
+  toast(
+    failures.length
+      ? `${t("Some receivers could not be repaired.")}\n${failures.join("\n")}`
+      : "Auto bugfix complete. Routes verified.",
+    failures.length ? "error" : "success",
+    "autofix",
+  );
+}
 const routeCache = new WeakMap();
+const receiverFocusCache = new WeakMap();
 const currentSource = (r) => r.state.source || r.state.last_source;
 async function load(client, page) {
   const access = page === "Access Control";
@@ -289,6 +321,63 @@ async function load(client, page) {
     event: { enabled: info.event_mode },
   };
 }
+function controlKey(node) {
+  if (node.nodeType !== 1) return "";
+  return (
+    node.getAttribute("data-key") ||
+    node.getAttribute("data-focus") ||
+    (node.hasAttribute("data-control")
+      ? `${node.getAttribute("data-control")}:${node.getAttribute("data-id") || ""}`
+      : "")
+  );
+}
+function patchControl(parent, nextParent) {
+  let cursor = parent.firstChild;
+  for (const desired of [...nextParent.childNodes]) {
+    const key = controlKey(desired);
+    let current = cursor;
+    if (key && (!current || controlKey(current) !== key)) {
+      current = [...parent.childNodes].find(
+        (node) =>
+          node.nodeName === desired.nodeName && controlKey(node) === key,
+      );
+      if (current) parent.insertBefore(current, cursor);
+    }
+    if (
+      !current ||
+      current.nodeName !== desired.nodeName ||
+      controlKey(current) !== key
+    ) {
+      current = desired.cloneNode(true);
+      parent.insertBefore(current, cursor);
+    } else if (current.nodeType === 3) {
+      if (current.data !== desired.data) current.data = desired.data;
+    } else if (current.nodeType === 1) {
+      for (const attribute of [...current.attributes]) {
+        if (
+          !desired.hasAttribute(attribute.name) &&
+          !attribute.name.startsWith("data-i18n-")
+        )
+          current.removeAttribute(attribute.name);
+      }
+      for (const attribute of [...desired.attributes]) {
+        if (current.getAttribute(attribute.name) !== attribute.value)
+          current.setAttribute(attribute.name, attribute.value);
+      }
+      patchControl(current, desired);
+      if (current.tagName === "SELECT" && current.value !== desired.value)
+        current.value = desired.value;
+      if (current.tagName === "INPUT" && current.value !== desired.value)
+        current.value = desired.value;
+    }
+    cursor = current.nextSibling;
+  }
+  while (cursor) {
+    const next = cursor.nextSibling;
+    cursor.remove();
+    cursor = next;
+  }
+}
 export function mountControl(host, client, page, changed = () => {}) {
   let data,
     disposed = false,
@@ -298,7 +387,10 @@ export function mountControl(host, client, page, changed = () => {}) {
     lastMarkup = "",
     restoreFocus = null,
     refreshing = null,
-    pendingRoute = null;
+    pendingRoute = null,
+    routeVersion = 0,
+    arranging = false,
+    focusedReceiver = receiverFocusCache.get(client) || "";
   const dialogs = new Set();
   const editDialog = (...args) => {
     const d = dialog(...args);
@@ -310,11 +402,12 @@ export function mountControl(host, client, page, changed = () => {}) {
     if (disposed) return;
     if (refreshing) await refreshing;
     if (disposed) return;
+    const version = routeVersion;
     const request = load(client, page);
     refreshing = request;
     try {
       const next = await request;
-      if (!disposed) {
+      if (!disposed && version === routeVersion) {
         data = next;
         render();
       }
@@ -339,6 +432,9 @@ export function mountControl(host, client, page, changed = () => {}) {
         lastMarkup = "";
         await refresh();
         await changed();
+      } catch (error) {
+        if (error.code === "revision_conflict") await refresh();
+        throw error;
       } finally {
         working = false;
       }
@@ -349,21 +445,47 @@ export function mountControl(host, client, page, changed = () => {}) {
   }
 
   async function route(receiver, source) {
-    if (working) return;
+    if (working || disposed) return;
     working = true;
+    routeVersion += 1; // Discard reads started before this switch.
     pendingRoute = { receiver: receiver.config.id, source };
     toast("Switching…", "loading", "routing");
     render();
     try {
-      await client.call("route.set", { receiver: receiver.config.id, source });
-      toast("Routing verified", "success", "routing");
-      await refresh();
-    } catch (error) {
-      toast(
-        `${receiver.config.label}: ${t(error.message)}`,
-        "error",
-        "routing",
+      const confirmed = await client.call("route.set", {
+        receiver: receiver.config.id,
+        source,
+      });
+      if (disposed) return;
+      const current = data.receivers.find(
+        (r) => r.config.id === receiver.config.id,
       );
+      if (current)
+        current.state = {
+          ...current.state,
+          ...confirmed,
+          last_source: confirmed.source,
+        };
+      routeCache.get(client)?.set(receiver.config.id, confirmed.source);
+      pendingRoute = null;
+      render();
+      toast("Routing verified", "success", "routing");
+      await refresh().catch(() =>
+        toast(
+          "Refresh failed. Displayed state may be out of date.",
+          "error",
+          "refresh-error",
+        ),
+      );
+    } catch (error) {
+      if (!disposed) {
+        toast(
+          `${receiver.config.label}: ${t(error.message)}`,
+          "error",
+          "routing",
+        );
+        await refresh().catch(() => {});
+      }
     } finally {
       working = false;
       pendingRoute = null;
@@ -371,12 +493,12 @@ export function mountControl(host, client, page, changed = () => {}) {
     }
   }
   function sourceEditor(source) {
-    editDialog(
-      source ? "Rename source" : "Save source",
+    const d = editDialog(
+      source ? "Rename source" : "Add source",
       `${
         source
           ? `<p class="secondary">${e(source.original_name)}</p>`
-          : `<label class="field">${t("Source")}<select name="source" required>${data.sources
+          : `<label class="field">${t("Source")}<select name="source" aria-label="${t("Source")}" required>${data.sources
               .filter((s) => !data.saved.some((x) => x.source === s.name))
               .map((s) => `<option value="${e(s.name)}">${e(s.name)}</option>`)
               .join("")}</select></label>`
@@ -396,6 +518,90 @@ export function mountControl(host, client, page, changed = () => {}) {
           d.close();
       },
     );
+    if (source) {
+      d.querySelector(".dialog-body").insertAdjacentHTML(
+        "beforeend",
+        b("Remove", "delete-source", 'class="quiet danger"'),
+      );
+      d.querySelector('[data-control="delete-source"]').onclick = async () => {
+        try {
+          if (
+            await mutate(
+              "sources.saved.remove",
+              { id: source.id },
+              "Remove saved source? The network source and existing routing will not be changed.",
+            )
+          )
+            d.close();
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      };
+    }
+  }
+  function receiverEditor(receiver) {
+    const config = receiver?.config;
+    const d = editDialog(
+      receiver ? "Edit receiver" : "Add device",
+      `${field("Name", "label", config?.label || "", 'required maxlength="64"')}${field("IP address", "ip", config?.ip || "", 'required inputmode="decimal" placeholder="192.168.1.100"')}<details class="disclosure"><summary>${t("Advanced")}</summary><div class="form-grid">${field("API port", "port", config?.port || 8080, 'type="number" min="1" max="65535"')}${field("Channel", "channel", config?.channel || 1, 'type="number" min="1" max="4"')}</div></details>${receiver ? b("Remove receiver", "remove-output", 'class="quiet danger"') : b("Discover receivers", "discover-output")}`,
+      async (f, d) => {
+        working = true;
+        try {
+          await client.call("receivers.add", {
+            id: config?.id || randomId(),
+            label: f.get("label"),
+            ip: f.get("ip"),
+            port: Number(f.get("port")),
+            channel: Number(f.get("channel")),
+          });
+          await refresh();
+          await changed();
+          d.close();
+        } finally {
+          working = false;
+        }
+      },
+    );
+    d.querySelector('[data-control="remove-output"]')?.addEventListener(
+      "click",
+      async () => {
+        try {
+          if (
+            await mutate(
+              "receivers.remove",
+              { id: config.id },
+              "Remove receiver?",
+            )
+          )
+            d.close();
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      },
+    );
+    d.querySelector('[data-control="discover-output"]')?.addEventListener(
+      "click",
+      async (event) => {
+        event.currentTarget.disabled = true;
+        working = true;
+        try {
+          const found = await client.call("receivers.discover");
+          for (const receiver of found)
+            await client.call("receivers.add", receiver);
+          await refresh();
+          await changed();
+          if (found.length) d.close();
+          else toast("No receivers found. Add a receiver by IP.");
+        } catch (error) {
+          toast(error.message, "error");
+        } finally {
+          working = false;
+          if (d.isConnected)
+            d.querySelector('[data-control="discover-output"]').disabled =
+              false;
+        }
+      },
+    );
   }
   function profileEditor(profile) {
     let actions = structuredClone(
@@ -404,17 +610,16 @@ export function mountControl(host, client, page, changed = () => {}) {
           id: randomId(),
           label: "",
           receiver: data.receivers[0]?.config.id || "",
-          source: data.sources[0]?.name || "",
+          source: data.saved[0]?.source || data.sources[0]?.name || "",
           icon: null,
           enabled: true,
           order: 0,
         },
       ],
     );
-    let openAction = actions[0].id;
     const d = editDialog(
       profile ? "Edit Simple Mode" : "Create Simple Mode",
-      `<div class="profile-basics">${field("Profile name", "name", profile?.name || "", 'required maxlength="64"')}<label class="field">${t("Password")}<span class="password-control"><input name="password" aria-label="${t("Password")}" type="password" autocomplete="new-password" ${profile ? `placeholder="${t("Leave empty to keep the current password.")}"` : "required"}>${b("Show password", "visible")}</span></label></div>${field("Description", "description", profile?.description || "", 'maxlength="256"')}<p class="help-text">${t("Use 4–128 Unicode characters. Short passwords are weak; use a longer password when possible.")}</p><label class="field-row"><input type="checkbox" name="enabled" ${profile?.enabled === false ? "" : "checked"}>${t("Enabled")}</label><div class="action-heading"><h3>${t("Action buttons")}</h3><small data-count></small></div><div data-actions></div>${b("Add button", "add")}`,
+      `<label class="field">${t("Password")}<span class="password-control"><input name="password" aria-label="${t("Password")}" type="password" autocomplete="new-password" ${profile ? `placeholder="${t("Leave empty to keep the current password.")}"` : "required"}>${b("Show password", "visible")}</span></label><p class="help-text">${t("Sign in with this separate password to use the fixed buttons.")}</p><div class="action-heading"><h3>${t("Action buttons")}</h3><small data-count></small></div><div data-actions></div>${b("+ Add button", "add")}`,
       async (f, d) => {
         readActions();
         if (actions.length < 1 || actions.length > 10)
@@ -426,9 +631,9 @@ export function mountControl(host, client, page, changed = () => {}) {
         )
           throw Error("Password must contain 4–128 Unicode characters");
         const params = {
-          name: f.get("name"),
-          description: f.get("description"),
-          enabled: f.has("enabled"),
+          name: profile?.name || actions[0].label,
+          description: profile?.description || "",
+          enabled: profile?.enabled ?? true,
           actions,
           ...(password ? { password } : {}),
           ...(profile ? { id: profile.id } : {}),
@@ -450,23 +655,15 @@ export function mountControl(host, client, page, changed = () => {}) {
       },
     );
     d.classList.add("profile-editor");
-    d.addEventListener(
-      "invalid",
-      (event) => {
-        const mapping = event.target.closest("[data-button]");
-        if (mapping) mapping.open = true;
-      },
-      true,
-    );
     function readActions() {
       d.querySelectorAll("[data-button]").forEach((el, i) => {
         actions[i] = {
           ...actions[i],
           label: el.querySelector("[name=label]").value,
-          icon: el.querySelector("[name=icon]").value || null,
+          icon: null,
           receiver: el.querySelector("[name=receiver]").value,
           source: el.querySelector("[name=source]").value,
-          enabled: el.querySelector("[name=action-enabled]").checked,
+          enabled: actions[i].enabled,
           order: i,
         };
       });
@@ -475,8 +672,12 @@ export function mountControl(host, client, page, changed = () => {}) {
       d.querySelector("[data-actions]").innerHTML = actions
         .map(
           (a, i) =>
-            `<details class="action-mapping" data-button="${i}" ${a.id === openAction ? "open" : ""}><summary><span class="action-number">${i + 1}</span><span><strong data-button-label data-user-content>${e(a.label || t("New button"))}</strong><small data-button-mapping data-user-content>${e(data.receivers.find((r) => r.config.id === a.receiver)?.config.label || t("Output"))} ← ${e(labelFor(data, a.source))}</small></span></summary><div class="mapping-body"><div class="mapping-fields"><div class="mapping-label">${field("Label", "label", a.label, 'required maxlength="64"')}</div><label class="field">${t("Output")}<select name="receiver" required>${data.receivers.map((r) => `<option value="${e(r.config.id)}" ${r.config.id === a.receiver ? "selected" : ""}>${e(r.config.label)}</option>`).join("")}</select></label><label class="field">${t("Source")}<select name="source" required>${[
-              ...new Set([...data.sources.map((s) => s.name), a.source]),
+            `<div class="action-mapping" data-button="${i}"><span class="action-number">${i + 1}</span>${field("Name", "label", a.label, 'required maxlength="64"')}<label class="field">${t("Device")}<select name="receiver" aria-label="${t("Device")}" required>${data.receivers.map((r) => `<option value="${e(r.config.id)}" ${r.config.id === a.receiver ? "selected" : ""}>${e(r.config.label)}</option>`).join("")}</select></label><label class="field">${t("NDI source")}<select name="source" aria-label="${t("NDI source")}" required>${[
+              ...new Set([
+                ...data.saved.map((s) => s.source),
+                ...data.sources.map((s) => s.name),
+                a.source,
+              ]),
             ]
               .filter(Boolean)
               .map(
@@ -485,7 +686,7 @@ export function mountControl(host, client, page, changed = () => {}) {
               )
               .join(
                 "",
-              )}</select></label></div><div class="mapping-options"><details><summary>${t("More options")}</summary>${field("Icon (optional)", "icon", a.icon || "", 'maxlength="32"')}</details><label class="field-row"><input type="checkbox" name="action-enabled" ${a.enabled ? "checked" : ""}>${t("Enabled")}</label><div class="inline-actions">${b("↑", "up", `aria-label="${t("Move button up")}" data-index="${i}" ${i === 0 ? "disabled" : ""}`)}${b("↓", "down", `aria-label="${t("Move button down")}" data-index="${i}" ${i === actions.length - 1 ? "disabled" : ""}`)}${b("Remove button", "remove", `data-index="${i}" ${actions.length === 1 ? "disabled" : ""}`)}</div></div></div></details>`,
+              )}</select></label><div class="mapping-row-actions">${b("↑", "up", `aria-label="${t("Move button up")}" data-index="${i}" ${i === 0 ? "disabled" : ""}`)}${b("↓", "down", `aria-label="${t("Move button down")}" data-index="${i}" ${i === actions.length - 1 ? "disabled" : ""}`)}${b("×", "remove", `aria-label="${t("Remove button")}" data-index="${i}" ${actions.length === 1 ? "disabled" : ""}`)}</div></div>`,
         )
         .join("");
       d.querySelector("[data-control=add]").disabled = actions.length >= 10;
@@ -507,96 +708,21 @@ export function mountControl(host, client, page, changed = () => {}) {
       if (!["add", "up", "down", "remove"].includes(action)) return;
       readActions();
       if (action === "add" && actions.length < 10) {
-        openAction = randomId();
-        actions.push({ ...actions[0], id: openAction, label: "" });
+        actions.push({
+          ...actions[0],
+          id: randomId(),
+          label: "",
+          icon: null,
+          enabled: true,
+        });
       }
       if (action === "remove" && actions.length > 1) {
         actions.splice(i, 1);
-        openAction = actions[Math.min(i, actions.length - 1)].id;
       }
       const j = action === "up" ? i - 1 : i + 1;
       if (["up", "down"].includes(action) && actions[j])
         [actions[i], actions[j]] = [actions[j], actions[i]];
       draw();
-    });
-    d.addEventListener(
-      "toggle",
-      (event) => {
-        if (event.target.matches("[data-button]") && event.target.open)
-          openAction = actions[Number(event.target.dataset.button)].id;
-      },
-      true,
-    );
-    d.addEventListener("input", (event) => {
-      const mapping = event.target.closest("[data-button]");
-      if (!mapping) return;
-      readActions();
-      const a = actions[Number(mapping.dataset.button)];
-      mapping.querySelector("[data-button-label]").textContent =
-        a.label || t("New button");
-      mapping.querySelector("[data-button-mapping]").textContent =
-        `${data.receivers.find((r) => r.config.id === a.receiver)?.config.label || t("Output")} ← ${labelFor(data, a.source)}`;
-    });
-    draw();
-  }
-  function selector(receiver, initialAll = false) {
-    const d = editDialog(
-      "Choose a source",
-      `<div class="source-current"><span class="status-dot ${receiver.state.online ? "" : "offline"}"></span><strong data-user-content>${e(labelFor(data, currentSource(receiver)))}</strong></div><label class="field"><span class="sr-only">${t("Search sources")}</span><input type="search" aria-label="${t("Search sources")}" placeholder="${t("Search sources")}" autocomplete="off" data-source-search></label><div class="inline-actions">${b("Saved sources", "saved")}${b("All Sources", "all")}</div><div data-options></div>`,
-      () => {},
-      "",
-    );
-    d.classList.add("source-dialog");
-    d.querySelector(".dialog-header h2").textContent = receiver.config.label;
-    d.querySelector(".dialog-header h2").setAttribute("data-user-content", "");
-    d.querySelector(".dialog-footer").remove();
-    // Keep the keyboard closed on touch devices until the user asks to search.
-    if (matchMedia("(pointer: fine)").matches)
-      d.querySelector("[data-source-search]").focus();
-    let query = "",
-      showAll = initialAll || !data.saved.length;
-    const draw = () => {
-      d.querySelector("[data-control=all]").setAttribute(
-        "aria-pressed",
-        showAll,
-      );
-      d.querySelector("[data-control=saved]").setAttribute(
-        "aria-pressed",
-        !showAll,
-      );
-      const sources = showAll
-        ? data.sources.map((s) => ({
-            source: s.name,
-            display_name: labelFor(data, s.name),
-          }))
-        : data.saved;
-      d.querySelector("[data-options]").innerHTML =
-        sources
-          .filter((s) =>
-            `${s.display_name} ${s.source}`
-              .toLowerCase()
-              .includes(query.toLowerCase()),
-          )
-          .map(
-            (s) =>
-              `<button type="button" class="source-option ${s.source === receiver.state.source ? "active" : ""}" aria-pressed="${s.source === receiver.state.source}" aria-label="${e(s.display_name)}" data-source="${e(s.source)}"><span data-user-content>${e(s.display_name)}${s.display_name !== s.source ? `<small>${e(s.source)}</small>` : ""}</span><span>${s.source === receiver.state.source ? "✓" : ""}</span></button>`,
-          )
-          .join("") || empty("No matching sources");
-    };
-    d.querySelector("[data-source-search]").oninput = (event) => {
-      query = event.target.value;
-      draw();
-    };
-    d.addEventListener("click", (event) => {
-      const x = event.target.closest("button");
-      if (!x) return;
-      if (x.hasAttribute("data-source")) {
-        d.close();
-        void route(receiver, x.dataset.source);
-      } else if (["all", "saved"].includes(x.dataset.control)) {
-        showAll = x.dataset.control === "all";
-        draw();
-      }
     });
     draw();
   }
@@ -607,6 +733,8 @@ export function mountControl(host, client, page, changed = () => {}) {
       sourceSearch,
       working,
       pendingRoute,
+      arranging,
+      focusedReceiver,
     });
     if (markup === lastMarkup) return;
     const active = document.activeElement;
@@ -617,11 +745,19 @@ export function mountControl(host, client, page, changed = () => {}) {
         : null;
     restoreFocus = focusKey;
     const selection = active?.selectionStart;
+    const tabs = host.querySelector(".receiver-tabs");
+    const tabsLeft = tabs?.scrollLeft || 0;
     const scroll = host.querySelector(".matrix-scroll");
     const scrollLeft = scroll?.scrollLeft || 0,
       scrollTop = scroll?.scrollTop || 0;
-    host.innerHTML = markup;
+    if (page === "Routing" && host.querySelector(".routing-console")) {
+      const template = document.createElement("template");
+      template.innerHTML = markup;
+      patchControl(host, template.content);
+    } else host.innerHTML = markup;
     lastMarkup = markup;
+    const nextTabs = host.querySelector(".receiver-tabs");
+    if (nextTabs) nextTabs.scrollLeft = tabsLeft;
     const nextScroll = host.querySelector(".matrix-scroll");
     if (nextScroll) {
       nextScroll.scrollLeft = scrollLeft;
@@ -632,7 +768,8 @@ export function mountControl(host, client, page, changed = () => {}) {
         (x) => x.dataset.focus === focusKey,
       );
       if (next && !next.disabled) {
-        next.focus({ preventScroll: true });
+        if (document.activeElement !== next)
+          next.focus({ preventScroll: true });
         restoreFocus = null;
       }
       if (next?.type === "search" && selection != null)
@@ -658,12 +795,36 @@ export function mountControl(host, client, page, changed = () => {}) {
     }[event.key];
     if (x && move) {
       event.preventDefault();
-      host
-        .querySelector(
-          `[data-row="${Number(x.dataset.row) + move[0]}"][data-col="${Number(x.dataset.col) + move[1]}"]`,
+      const row = Number(x.dataset.row),
+        col = Number(x.dataset.col);
+      const candidates = [...host.querySelectorAll("[data-row]")].filter(
+        (button) => !button.disabled && button.getClientRects().length,
+      );
+      const axis = move[0] ? "row" : "col";
+      const direction = move[0] || move[1];
+      const position = move[0] ? row : col;
+      const next = candidates
+        .filter(
+          (button) =>
+            (move[0]
+              ? Number(button.dataset.col) === col
+              : Number(button.dataset.row) === row) &&
+            (Number(button.dataset[axis]) - position) * direction > 0,
         )
-        ?.focus();
+        .sort(
+          (a, b) =>
+            (Number(a.dataset[axis]) - Number(b.dataset[axis])) * direction,
+        )[0];
+      next?.focus();
     }
+  };
+  host.onchange = (event) => {
+    const select = event.target.closest("[data-source-select]");
+    if (!select || !select.value || working) return;
+    const receiver = data.receivers.find(
+      (r) => r.config.id === select.dataset.id,
+    );
+    if (receiver) void route(receiver, select.value);
   };
   host.onclick = async (event) => {
     const x = event.target.closest("[data-control]");
@@ -680,28 +841,46 @@ export function mountControl(host, client, page, changed = () => {}) {
         d.querySelector("[name=source]").value = x.dataset.source;
       }
       if (action === "source-edit") {
-        const row = x.closest(".list-row");
-        const main = row.querySelector(".list-main");
-        main.innerHTML = `<form class="inline-editor">${field("Display name", "display_name", source.display_name, 'required maxlength="64"')}<div class="inline-actions"><button class="primary">${t("Save")}</button>${b("Cancel", "source-cancel")}</div></form>`;
-        const form = main.querySelector("form");
-        form.querySelector("input").focus();
-        form.onsubmit = async (event) => {
-          event.preventDefault();
-          form.querySelectorAll("button").forEach((b) => (b.disabled = true));
+        const d = sourceEditor(source);
+      }
+      if (action === "receiver-add") receiverEditor();
+      if (action === "receiver-edit")
+        receiverEditor(data.receivers.find((r) => r.config.id === id));
+      if (action === "receiver-focus") {
+        focusedReceiver = id;
+        receiverFocusCache.set(client, id);
+        render();
+      }
+      if (action === "arrange") {
+        arranging = !arranging;
+        render();
+      }
+      if (["receiver-up", "receiver-down"].includes(action)) {
+        const ids = data.receivers.map((r) => r.config.id),
+          i = ids.indexOf(id),
+          j = i + (action === "receiver-up" ? -1 : 1);
+        if (j >= 0 && j < ids.length) {
+          [ids[i], ids[j]] = [ids[j], ids[i]];
+          working = true;
           try {
-            await mutate(
-              "sources.saved.update",
-              { id, display_name: new FormData(form).get("display_name") },
-              "",
-            );
-          } catch (error) {
-            toast(error.message, "error", "form-error");
+            await client.call("receivers.reorder", { ids });
+            await refresh();
+            await changed();
           } finally {
-            form
-              .querySelectorAll("button")
-              .forEach((b) => (b.disabled = false));
+            working = false;
           }
-        };
+        }
+      }
+      if (action === "autofix") {
+        working = true;
+        render();
+        try {
+          await autoFix(client);
+          await refresh();
+        } finally {
+          working = false;
+          render();
+        }
       }
       if (action === "source-cancel") {
         lastMarkup = "";
@@ -772,11 +951,6 @@ export function mountControl(host, client, page, changed = () => {}) {
             ? "Disable Event Mode? Simple Modes will become available again."
             : "Enabling Event Mode will temporarily disable all Simple Modes. Only the administrator will be able to control DRouter.",
         );
-      if (action === "pick")
-        selector(
-          data.receivers.find((r) => r.config.id === id),
-          x.dataset.all === "true",
-        );
       if (action === "route")
         await route(
           data.receivers.find((r) => r.config.id === id),
@@ -795,6 +969,22 @@ export function mountControl(host, client, page, changed = () => {}) {
       toast(error.message, "error", "control-error");
     }
   });
+  // Header Event Mode changes update the revision used by an immediately opened editor.
+  const receiveInfo = ({ detail: info }) => {
+    if (
+      data &&
+      info.revision >= data.info.revision &&
+      info.event_mode !== data.info.event_mode
+    ) {
+      data.info = {
+        ...data.info,
+        revision: info.revision,
+        event_mode: info.event_mode,
+      };
+      data.event.enabled = info.event_mode;
+    }
+  };
+  document.addEventListener("drouter-info", receiveInfo);
   document.addEventListener("drouter-language", render);
   const timer = setInterval(() => {
     if (
@@ -815,11 +1005,13 @@ export function mountControl(host, client, page, changed = () => {}) {
   return () => {
     disposed = true;
     document.removeEventListener("drouter-language", render);
+    document.removeEventListener("drouter-info", receiveInfo);
     clearInterval(timer);
     dialogs.forEach((d) => d.close());
     host.onclick = null;
     host.onkeydown = null;
     host.oninput = null;
+    host.onchange = null;
   };
 }
 export function mountSimple(host, client, logout) {
@@ -828,9 +1020,15 @@ export function mountSimple(host, client, logout) {
     profile,
     reading = null,
     lastMarkup = "";
+  function leave(message) {
+    if (stopped) return;
+    stopped = true;
+    client.onDisconnect = () => {};
+    logout(message);
+  }
   function render() {
     if (stopped || !profile) return;
-    const markup = `<main class="simple-screen"><header><strong>DRouter</strong>${languageControl()}${b("Logout", "logout")}</header><div class="simple-heading"><h1 data-user-content>${e(profile.name)}</h1><p data-user-content>${e(profile.description)}</p><span class="status-text"><span class="status-dot"></span>${t("Connected")}</span></div>${profile.locked ? `<div class="notice" role="status"><h2>${t("Event Mode")}</h2><p>${t("Simple Mode is temporarily locked by the administrator.")}</p></div>` : `<div class="simple-grid">${profile.actions.map((a) => b(`${a.icon ? e(a.icon) + " " : ""}${e(a.label)}${pending === a.id ? " · " + t("Switching…") : ""}`, a.id, `data-user-content class="simple-action ${pending === a.id ? "pending" : ""}" ${pending ? "disabled" : ""}`)).join("")}</div>`}</main>`;
+    const markup = `<main class="simple-screen"><header><strong>DRouter</strong>${languageControl()}${b("Logout", "logout")}</header><div class="simple-heading"><h1 data-user-content>${e(profile.name)}</h1><p data-user-content>${e(profile.description)}</p></div>${profile.locked ? `<div class="notice" role="status"><h2>${t("Event Mode")}</h2><p>${t("Simple Mode is temporarily locked by the administrator.")}</p></div>` : `<div class="simple-grid">${profile.actions.map((a) => b(`${e(a.label)}${pending === a.id ? " · " + t("Switching…") : ""}`, a.id, `data-user-content class="simple-action ${pending === a.id ? "pending" : ""}" ${pending ? "disabled" : ""}`)).join("")}</div><div class="simple-tools">${b(pending === "autofix" ? "Auto bugfix running…" : "Auto bugfix", "autofix", pending ? "disabled" : "")}</div>`}</main>`;
     if (markup !== lastMarkup) {
       host.innerHTML = markup;
       lastMarkup = markup;
@@ -855,11 +1053,24 @@ export function mountSimple(host, client, logout) {
       try {
         await client.call("auth.logout");
       } finally {
-        logout();
+        leave();
       }
       return;
     }
     if (pending || profile?.locked) return;
+    if (x.dataset.control === "autofix") {
+      pending = "autofix";
+      render();
+      try {
+        await autoFix(client, profile.actions);
+      } catch (error) {
+        toast(error.message, "error", "autofix");
+      } finally {
+        pending = null;
+        render();
+      }
+      return;
+    }
     pending = x.dataset.control;
     toast("Switching…", "loading", "simple-routing");
     render();
@@ -869,21 +1080,22 @@ export function mountSimple(host, client, logout) {
     } catch (error) {
       toast(error.message, "error", "simple-routing");
     } finally {
-      await refresh().catch(() => logout());
+      await refresh().catch(() => leave());
       pending = null;
       render();
     }
   };
   client.onDisconnect = () =>
-    logout("Device disconnected. Reconnect to continue.");
-  void refresh().catch(() => logout());
+    leave("Device disconnected. Reconnect to continue.");
+  void refresh().catch(() => leave());
   document.addEventListener("drouter-language", render);
   const timer = setInterval(() => {
     if (!pending && !reading && document.visibilityState === "visible")
-      void refresh().catch(() => logout());
+      void refresh().catch(() => leave());
   }, 2500);
   return () => {
     stopped = true;
+    client.onDisconnect = () => {};
     document.removeEventListener("drouter-language", render);
     clearInterval(timer);
     host.onclick = null;
@@ -891,14 +1103,20 @@ export function mountSimple(host, client, logout) {
 }
 
 function controlMarkup(data, page, state) {
-  const { search, sourceSearch, working, pendingRoute } = state;
+  const {
+    search,
+    sourceSearch,
+    working,
+    pendingRoute,
+    arranging,
+    focusedReceiver,
+  } = state;
   const pending = (r, source) =>
     pendingRoute?.receiver === r.config.id && pendingRoute?.source === source;
-  const arrow = '<span aria-hidden="true">⌄</span>';
   const searchInput = (label, key, value) =>
     `<label class="search-field ${key === "source" ? "source-filter" : ""}"><span class="sr-only">${t(label)}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg><input type="search" aria-label="${t(label)}" placeholder="${t(label)}" data-${key}-search data-focus="${key}-search" value="${e(value)}" autocomplete="off"></label>`;
   const order = (kind, item, i, length) =>
-    `<div class="order-actions">${b("↑", `${kind}-up`, `data-focus="${kind}-up-${e(item.id)}" aria-label="${t("Move up")} · ${e(item.display_name || item.name)}" data-id="${e(item.id)}" ${i === 0 ? "disabled" : ""}`)}${b("↓", `${kind}-down`, `data-focus="${kind}-down-${e(item.id)}" aria-label="${t("Move down")} · ${e(item.display_name || item.name)}" data-id="${e(item.id)}" ${i === length - 1 ? "disabled" : ""}`)}</div>`;
+    `<div class="order-actions">${b(kind === "receiver" ? "←" : "↑", `${kind}-up`, `data-focus="${kind}-up-${e(item.id)}" aria-label="${t(kind === "receiver" ? "Move left" : "Move up")} · ${e(item.display_name || item.name)}" data-id="${e(item.id)}" ${i === 0 ? "disabled" : ""}`)}${b(kind === "receiver" ? "→" : "↓", `${kind}-down`, `data-focus="${kind}-down-${e(item.id)}" aria-label="${t(kind === "receiver" ? "Move right" : "Move down")} · ${e(item.display_name || item.name)}" data-id="${e(item.id)}" ${i === length - 1 ? "disabled" : ""}`)}</div>`;
   if (page === "Sources") {
     const matches = (s) =>
       `${s.display_name || ""} ${s.source || s.name}`
@@ -925,7 +1143,7 @@ function controlMarkup(data, page, state) {
   if (page === "Simple Modes")
     return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
   if (page === "Access Control")
-    return `<div class="settings-row"><div class="settings-copy">${t("Event Mode")}<span>${t(data.event.enabled ? "Enabled" : "Disabled")}</span></div>${b(data.event.enabled ? "Disable Event Mode" : "Enable Event Mode", "event")}</div><p class="help-text">${t("Enabling Event Mode will temporarily disable all Simple Modes. Only the administrator will be able to control DRouter.")}</p><h3 class="list-section-title">${t("Simple Modes")}</h3><div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div><div class="data-list profile-list">${data.profiles.map((p, i) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong>${p.description ? `<span data-user-content>${e(p.description)}</span>` : ""}<small>${p.actions.length} / 10 · ${t(p.enabled ? "Enabled" : "Disabled")}</small><span class="profile-preview" data-user-content>${p.actions.map((a) => e(a.label)).join(" · ")}</span></div><div class="row-actions">${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Preview", "profile-preview", `data-id="${e(p.id)}"`)}${b(p.enabled ? "Disable" : "Enable", "profile-toggle", `data-id="${e(p.id)}"`)}${order("profile", p, i, data.profiles.length)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div><div class="settings-row"><span>${t("Language")}</span>${languageControl()}</div><div class="settings-row"><span>${t("Contact")}</span><a href="mailto:benedek@dezso.hu">benedek@dezso.hu</a></div>`;
+    return `<div class="access-heading"><div><h2>${t("Simple Mode")}</h2><p class="help-text">${t("A separate password and fixed routing buttons.")}</p></div>${b("Create Simple Mode", "profile-add")}</div><div class="data-list profile-list">${data.profiles.map((p) => `<div class="list-row"><div class="list-main"><strong data-user-content>${e(p.name)}</strong><small>${p.actions.length} / 10 ${t("Action buttons")}</small></div><div class="row-actions"><button type="button" data-control="profile-toggle" data-id="${e(p.id)}" class="event-toggle" role="switch" aria-label="${e(t("Enable") + " " + p.name)}" aria-checked="${p.enabled}"><span class="switch-track" aria-hidden="true"></span></button>${b("Edit", "profile-edit", `data-id="${e(p.id)}"`)}${b("Delete", "profile-delete", `class="quiet danger" data-id="${e(p.id)}"`)}</div></div>`).join("") || empty("No Simple Modes configured")}</div>`;
   if (page !== "Routing") return "";
   const receivers = data.receivers.filter((r) =>
     `${r.config.label} ${r.config.ip}`
@@ -937,45 +1155,55 @@ function controlMarkup(data, page, state) {
       .toLowerCase()
       .includes(sourceSearch.toLowerCase()),
   );
-  const routeButton = (r, s, ri, ci, mobile = false) =>
-    b(
-      pending(r, s.source)
-        ? '<span class="spinner" aria-hidden="true"></span>'
-        : mobile
-          ? `<span class="quick-label" data-user-content>${e(s.display_name)}</span>`
-          : r.state.source === s.source
-            ? "✓"
-            : "·",
+  const mobileReceiver =
+    receivers.find((r) => r.config.id === focusedReceiver) || receivers[0];
+  const check =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
+  const mobile = (r) => `data-mobile-visible="${r === mobileReceiver}"`;
+  const routeButton = (r, source, row, col) => {
+    const active = r.state.source === source.source;
+    const waiting = pending(r, source.source);
+    return b(
+      `<span class="crosspoint-mark" aria-hidden="true">${waiting ? '<span class="spinner"></span>' : active ? check : '<span class="crosspoint-ring"></span>'}</span><span class="crosspoint-copy">${t(waiting ? "Switching…" : active ? "Active" : r.state.online ? "Switch" : "Offline")}</span>`,
       "route",
-      `class="${mobile ? "quick-route" : "crosspoint"} ${r.state.source === s.source ? "active" : ""} ${pending(r, s.source) ? "pending" : ""}" data-focus="${mobile ? "quick" : "matrix"}-${e(r.config.id)}-${e(s.id)}" data-row="${ri}" data-col="${ci}" data-id="${e(r.config.id)}" data-source="${e(s.source)}" aria-label="${e(t("Route {source} to {output}", { source: s.display_name, output: r.config.label }))}" aria-pressed="${r.state.source === s.source}" ${working || !r.state.online ? "disabled" : ""}`,
+      `class="crosspoint ${active ? "active" : ""} ${waiting ? "pending" : ""}" data-focus="matrix-${e(r.config.id)}-${e(source.id)}" data-row="${row}" data-col="${col}" data-id="${e(r.config.id)}" data-source="${e(source.source)}" aria-label="${e(t("Route {source} to {output}", { source: source.display_name, output: r.config.label }))}" aria-pressed="${active}" ${working || !r.state.online ? "disabled" : ""}`,
     );
-  const pickerButton = (r, mobile = false) =>
-    b(
-      `${e(mobile ? t("All Sources") : currentSource(r) && !data.saved.some((s) => s.source === currentSource(r)) ? labelFor(data, currentSource(r)) : t("All Sources"))}${arrow}`,
-      "pick",
-      `class="${mobile ? "all-sources" : ""}" data-id="${e(r.config.id)}" data-all="true" aria-haspopup="dialog" aria-label="${e(t("All Sources") + " · " + r.config.label)}" ${working || !r.state.online ? "disabled" : ""}`,
-    );
-  const refreshIcon =
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/></svg>';
-  const quickSources = (r) => {
-    const sources = data.saved.slice(0, 4);
-    const active = data.saved.find((s) => s.source === currentSource(r));
-    if (active && !sources.includes(active))
-      sources[sources.length - 1] = active;
-    return sources;
   };
-  return `<div class="routing-overview"><span><span class="status-dot"></span><strong>${data.receivers.filter((r) => r.state.online).length}/${data.receivers.length}</strong> ${t("Online")}</span><span><strong>${data.saved.length}</strong> ${t("Saved sources")}</span></div><div class="routing-tools">${searchInput("Find an output", "output", search)}${searchInput("Find a source", "source", sourceSearch)}${b(`${refreshIcon}<span>${t("Refresh sources")}</span>`, "refresh", `aria-label="${t("Refresh sources")}" ${working ? "disabled" : ""}`)}</div>${
-    !receivers.length
-      ? `<div class="empty-state"><h2>${t(data.receivers.length ? "No matching outputs" : "No outputs connected")}</h2><p>${t(data.receivers.length ? "Try another search." : "Add a BirdDog receiver in Devices to start routing.")}</p></div>`
-      : `<div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><thead><tr><th scope="col">${t("Source / output")}</th>${receivers.map((r) => `<th scope="col"><strong data-user-content>${e(r.config.label)}</strong><small class="output-source"><span class="status-dot ${r.state.online ? "" : "offline"}"></span> ${t(r.state.online ? "Online" : "Offline")}<br><span data-user-content>${e(labelFor(data, currentSource(r)))}</span>${!r.state.online && currentSource(r) ? ` · ${t("Last known")}` : ""}</small></th>`).join("")}</tr></thead><tbody>${saved.map((s, ri) => `<tr><th scope="row"><span data-user-content>${e(s.display_name)}</span>${data.sources.some((x) => x.name === s.source) ? "" : `<small class="output-source">${t("Unavailable")}</small>`}</th>${receivers.map((r, ci) => `<td>${routeButton(r, s, ri, ci)}</td>`).join("")}</tr>`).join("")}<tr class="other-source"><th scope="row">${t("All Sources")}</th>${receivers.map((r) => `<td class="${currentSource(r) && !data.saved.some((s) => s.source === currentSource(r)) ? "other-active" : ""}">${pickerButton(r)}</td>`).join("")}</tr></tbody></table></div><div class="matrix-footer"><span><span class="legend-mark">●</span>${t("Verified active source")}</span><span>${t("Select a crosspoint to route")}</span></div><div class="output-list">${receivers
-          .map(
-            (r, ci) =>
-              `<section class="output-row" data-online="${r.state.online}"><div class="output-heading"><span class="output-index" aria-hidden="true">${String(ci + 1).padStart(2, "0")}</span><strong data-user-content>${e(r.config.label)}</strong><span class="status-text"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span></div>${b(`<span class="output-text"><small>${t(pendingRoute?.receiver === r.config.id ? "Switching…" : !r.state.online && currentSource(r) ? "Last known" : "Current source")}</small><span class="current-route" data-user-content>${e(labelFor(data, currentSource(r)))}</span></span><span class="output-chevron" aria-hidden="true">›</span>`, "pick", `class="output-open" aria-label="${e(t("Change source for {output}", { output: r.config.label }))}" data-id="${e(r.config.id)}" ${working || !r.state.online ? "disabled" : ""}`)}<div class="output-quick"><div class="quick-sources" aria-label="${t("Saved sources")}">${quickSources(
-                r,
-              )
-                .map((s, ri) => routeButton(r, s, ri, ci, true))
-                .join("")}</div>${pickerButton(r, true)}</div></section>`,
-          )
-          .join("")}</div>`
-  }`;
+  const sourceSelect = (r) => {
+    const current = currentSource(r);
+    const switching = pendingRoute?.receiver === r.config.id;
+    const known = data.sources.some((source) => source.name === current);
+    return `<select class="matrix-picker" data-source-select data-id="${e(r.config.id)}" data-focus="ndi-source-${e(r.config.id)}" aria-label="${e(t("NDI source for {output}", { output: r.config.label }))}" ${working || !r.state.online || !data.sources.length ? "disabled" : ""}><option value="" disabled ${switching || !current ? "selected" : ""}>${t(switching ? "Switching…" : "Choose NDI source")}</option>${current && !known && !switching ? `<option data-user-content value="${e(current)}" selected disabled>${e(labelFor(data, current))} · ${t("Unavailable")}</option>` : ""}${data.sources
+      .map((source) => {
+        const alias = labelFor(data, source.name);
+        return `<option data-user-content value="${e(source.name)}" ${!switching && source.name === current ? "selected" : ""}>${e(alias === source.name ? source.name : `${alias} · ${source.name}`)}</option>`;
+      })
+      .join("")}</select>`;
+  };
+  const edit = (label, action, id) =>
+    b(
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m15 4 5 5M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15z"/></svg>',
+      action,
+      `class="quiet icon-button header-edit" data-id="${e(id)}" aria-label="${e(t(label))}"`,
+    );
+  const sourceOrder = (source) =>
+    arranging
+      ? order("source", source, data.saved.indexOf(source), data.saved.length)
+      : "";
+  const receiverOrder = (r) =>
+    arranging
+      ? order(
+          "receiver",
+          { id: r.config.id, name: r.config.label },
+          data.receivers.indexOf(r),
+          data.receivers.length,
+        )
+      : "";
+  const receiverTabs = `<div class="receiver-tabs" role="group" aria-label="${t("Choose receiver")}">${receivers.map((r) => b(`<span class="receiver-tab-name"><span class="status-dot ${r.state.online ? "" : "offline"}"></span><strong data-user-content>${e(r.config.label)}</strong></span><span class="receiver-tab-source" data-user-content>${e(labelFor(data, currentSource(r)))}</span>`, "receiver-focus", `class="receiver-tab" data-id="${e(r.config.id)}" data-focus="receiver-focus-${e(r.config.id)}" aria-pressed="${r === mobileReceiver}" aria-label="${e(t("Show receiver {output}", { output: r.config.label }))}"`)).join("")}</div>`;
+  const emptyState = !receivers.length
+    ? `<div class="matrix-empty"><h2>${t(data.receivers.length ? "No matching outputs" : "No outputs connected")}</h2><p>${t(data.receivers.length ? "Try another search." : "Add a receiver and a source to start routing.")}</p></div>`
+    : !saved.length
+      ? `<tr class="matrix-empty-row" data-key="empty-sources"><td colspan="${receivers.length + 1}"><p>${t(data.saved.length ? "No matching sources" : "No saved sources")}</p>${data.saved.length ? "" : b("+ Add source", "source-add", 'class="quiet"')}</td></tr>`
+      : "";
+  return `<div class="routing-console"><div class="routing-tools">${searchInput("Find a source", "source", sourceSearch)}${searchInput("Find an output", "output", search)}<div class="routing-tool-actions">${b(arranging ? "Done" : "Reorder", "arrange", `class="${arranging ? "primary" : ""}" aria-pressed="${arranging}"`)}${b("Auto bugfix", "autofix", working ? "disabled" : "")}</div></div>${receiverTabs}<div class="matrix-frame"><div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><caption class="sr-only">${t("Transmitters are rows. Receivers are columns. Select a cell to switch.")}</caption><thead><tr><th scope="col" class="matrix-corner"><span>${t("Receiver")} <span aria-hidden="true">→</span></span><strong>${t("Transmitter")} <span aria-hidden="true">↓</span></strong></th>${receivers.map((r, col) => `<th scope="col" data-key="receiver-${e(r.config.id)}" class="receiver-column ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}><div class="receiver-header"><span class="matrix-index" aria-hidden="true">${String(data.receivers.indexOf(r) + 1).padStart(2, "0")}</span><strong title="${e(r.config.label)}" data-user-content>${e(r.config.label)}</strong>${edit("Edit receiver", "receiver-edit", r.config.id)}</div><span class="receiver-state"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span><div class="output-source" title="${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}"><span data-user-content>${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}</span></div>${receiverOrder(r)}</th>`).join("")}</tr></thead><tbody>${saved.map((source, row) => `<tr class="source-row" data-key="source-${e(source.id)}"><th scope="row"><div class="source-header"><span class="matrix-index" aria-hidden="true">${String(data.saved.indexOf(source) + 1).padStart(2, "0")}</span><div class="source-identity"><strong title="${e(source.display_name)}" data-user-content>${e(source.display_name)}</strong>${source.display_name !== source.source ? `<small title="${e(source.source)}" data-user-content>${e(source.source)}</small>` : ""}${data.sources.some((s) => s.name === source.source) ? "" : `<small class="unavailable-source">${t("Unavailable")}</small>`}</div>${edit("Edit source", "source-edit", source.id)}</div>${sourceOrder(source)}</th>${receivers.map((r, col) => `<td data-key="route-${e(r.config.id)}" class="route-cell ${r.state.source === source.source ? "route-active" : ""} ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}>${routeButton(r, source, row, col)}</td>`).join("")}</tr>`).join("")}${receivers.length ? emptyState : ""}<tr class="other-source" data-key="other-sources"><th scope="row"><strong>${t("Other device")}</strong><small>${t("All NDI sources")}</small></th>${receivers.map((r, col) => `<td data-key="other-${e(r.config.id)}" data-route-col="${col}" ${mobile(r)} class="${currentSource(r) && !data.saved.some((source) => source.source === currentSource(r)) ? "other-active" : ""}">${sourceSelect(r)}</td>`).join("")}</tr></tbody></table>${receivers.length ? "" : emptyState}</div><div class="matrix-bottom"><div class="matrix-add-actions">${b("+ Add source", "source-add")}${b("+ Add device", "receiver-add")}</div><span class="matrix-hint"><span class="legend-active" aria-hidden="true">${check}</span>${t("Verified active source")}</span></div></div></div>`;
 }

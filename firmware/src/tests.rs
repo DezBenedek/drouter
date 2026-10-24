@@ -888,3 +888,165 @@ fn missing_event_state_is_locked_and_failed_logins_back_off() {
         .start("later", &login.public_key(), &recovered.credential, 6)
         .is_ok());
 }
+
+#[test]
+fn receiver_order_is_validated_persisted_and_atomic() {
+    let (mut d, store) = device();
+    let mut second = receiver();
+    second.id = "two".into();
+    second.label = "Output two".into();
+    call(&mut d, "receivers.add", json!(second)).unwrap();
+    for ids in [
+        json!(["one"]),
+        json!(["one", "one"]),
+        json!(["one", "missing"]),
+    ] {
+        assert!(call(&mut d, "receivers.reorder", json!({"ids":ids})).is_err());
+        assert_eq!(d.config.as_ref().unwrap().receivers[0].id, "one");
+    }
+    call(&mut d, "receivers.reorder", json!({"ids":["two","one"]})).unwrap();
+    assert_eq!(
+        store.0.lock().unwrap().config.as_ref().unwrap().receivers[0].id,
+        "two"
+    );
+    store.0.lock().unwrap().fail = true;
+    assert!(call(&mut d, "receivers.reorder", json!({"ids":["one","two"]})).is_err());
+    assert_eq!(d.config.as_ref().unwrap().receivers[0].id, "two");
+}
+
+struct RepairDecoder {
+    decoder: Decoder,
+    switches: Arc<Mutex<usize>>,
+}
+impl BirdDog for RepairDecoder {
+    fn request(
+        &mut self,
+        r: &Receiver,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        if path == "/refresh" {
+            // A refresh can lose the decoder's route. The repair must restore and verify it.
+            self.decoder.active = "Camera B".into();
+        }
+        if method == "POST" && path.starts_with("/connectTo") {
+            *self.switches.lock().unwrap() += 1;
+        }
+        self.decoder.request(r, method, path, body)
+    }
+}
+
+#[test]
+fn auto_fix_verifies_restoration_and_restricts_profile_targets() {
+    let (_, store) = device();
+    let switches = Arc::new(Mutex::new(0));
+    let make = |ignore| {
+        Device::new(
+            Box::new(store.clone()),
+            Box::new(RepairDecoder {
+                decoder: Decoder {
+                    active: "Camera A".into(),
+                    ignore,
+                    online: true,
+                },
+                switches: switches.clone(),
+            }),
+            true,
+        )
+        .unwrap()
+    };
+    let mut d = make(false);
+    let result = call(&mut d, "route.repair", json!({"id":"one"})).unwrap();
+    assert_eq!(result["restored"], true);
+    assert_eq!(
+        call(&mut d, "route.get", json!({})).unwrap()[0]["source"],
+        "Camera A"
+    );
+    let mut failing = make(true);
+    assert!(call(&mut failing, "route.repair", json!({"id":"one"})).is_err());
+    assert!(call(&mut d, "route.repair", json!({"id":"missing"})).is_err());
+    confirmed(&mut d, "simple.create", json!({"name":"Repair profile","password":"repair-password","actions":[simple_action("fixed","Camera B")]})).unwrap();
+    confirmed(&mut d, "event.disable", json!({})).unwrap();
+    let key = login_role(&mut d, "repair-user", "repair-password");
+    let before = *switches.lock().unwrap();
+    let result = rpc_role(
+        &mut d,
+        "repair-user",
+        &key,
+        1,
+        "simple.repair",
+        json!({"id":"one"}),
+    );
+    assert_eq!(result["ok"], false);
+    assert!(result["error"].to_string().contains("forbidden"));
+    assert_eq!(
+        *switches.lock().unwrap(),
+        before,
+        "Unassigned sources must never be switched by a restricted user"
+    );
+    assert_eq!(
+        rpc_role(
+            &mut d,
+            "repair-user",
+            &key,
+            2,
+            "simple.repair",
+            json!({"id":"missing"})
+        )["ok"],
+        false
+    );
+    assert_eq!(
+        rpc_role(
+            &mut d,
+            "repair-user",
+            &key,
+            3,
+            "route.repair",
+            json!({"id":"one"})
+        )["ok"],
+        false
+    );
+    call(
+        &mut d,
+        "route.set",
+        json!({"receiver":"one","source":"Camera B"}),
+    )
+    .unwrap();
+    d.last_simple_action.clear();
+    assert_eq!(
+        rpc_role(
+            &mut d,
+            "repair-user",
+            &key,
+            4,
+            "simple.repair",
+            json!({"id":"one"})
+        )["result"]["restored"],
+        true
+    );
+    assert_eq!(
+        rpc_role(
+            &mut d,
+            "repair-user",
+            &key,
+            5,
+            "simple.repair",
+            json!({"id":"one"})
+        )["ok"],
+        false,
+        "Repair is rate limited"
+    );
+    confirmed(&mut d, "event.enable", json!({})).unwrap();
+    d.last_simple_action.clear();
+    let locked = rpc_role(
+        &mut d,
+        "repair-user",
+        &key,
+        6,
+        "simple.repair",
+        json!({"id":"one"}),
+    );
+    assert_eq!(locked["ok"], false);
+    assert!(locked["error"].to_string().contains("event_locked"));
+}

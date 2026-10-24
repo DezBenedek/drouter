@@ -78,8 +78,8 @@ export function Feedback() {
         "--feedback-bottom",
         menu?.height
           ? `${innerHeight - menu.top + 12}px`
-          : mobile && document.querySelector(".app-nav")
-            ? "calc(84px + env(safe-area-inset-bottom))"
+          : mobile
+            ? "calc(16px + env(safe-area-inset-bottom))"
             : "24px",
       );
       if (!host.matches(":popover-open")) host.showPopover();

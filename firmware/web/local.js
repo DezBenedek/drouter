@@ -8,7 +8,7 @@ import {
 } from "./shared/control.js";
 import { installLocalization, languageControl } from "./shared/i18n.js";
 import { Client, randomId, remoteStatus } from "./shared/client.js";
-import { theme, toggleTheme } from "./shared/theme.js";
+import "./shared/theme.js";
 const root = document.querySelector("#app");
 const esc = (s) =>
   String(s ?? "").replace(
@@ -21,11 +21,6 @@ const esc = (s) =>
 const icon = (path) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">${path}</svg>`;
 const icons = {
-  Routing: icon('<path d="M4 5h16M4 12h16M4 19h16M8 2v20M16 2v20"/>'),
-  Sources: icon('<path d="M4 5h16M4 12h16M4 19h16"/>'),
-  Devices: icon(
-    '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
-  ),
   Settings: icon(
     '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="16" cy="17" r="3"/>',
   ),
@@ -37,21 +32,16 @@ const field = (name, label, value = "", type = "text", extra = "") =>
   `<label class="field">${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
 const password = (name, label, required = false) =>
   `<label class="field">${label}<span class="password-control"><input aria-label="${label}" name="${name}" type="password" autocomplete="${name === "password" ? "current-password" : "new-password"}" ${required ? "required" : ""}>${button(icon('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>'), "visibility", 'class="quiet" aria-label="Show password"')}</span></label>`;
-const search = (label, value, id, cls = "") =>
-  `<label class="search-field ${cls}"><span class="sr-only">${label}</span>${icon('<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>')}<input type="search" data-search="${id}" placeholder="${label}" value="${esc(value)}" autocomplete="off"></label>`;
 const status = (online, text) =>
   `<span class="status-text"><span class="status-dot ${online ? "" : "offline"}"></span>${esc(text)}</span>`;
 const row = (title, value, detail = "") =>
   `<div class="settings-row"><div class="settings-copy">${title}${detail ? `<span>${detail}</span>` : ""}</div>${value}</div>`;
-const empty = (title, detail) =>
-  `<div class="empty-state"><h2>${title}</h2><p>${detail}</p></div>`;
 let client,
   data = {},
   page = "Routing",
   busy = false,
   message = "",
-  failure = "",
-  outputSearch = "";
+  failure = "";
 let dialog, dialogSubmit, controlCleanup, restrictedCleanup;
 function closeDialog() {
   if (dialog) {
@@ -155,12 +145,16 @@ async function run(task, close = false) {
   }
 }
 function logout(text = "", kind = "error") {
+  page = "Routing";
   dismissToast();
   controlCleanup?.();
   restrictedCleanup?.();
   restrictedCleanup = null;
   controlCleanup = null;
-  client?.close();
+  if (client) {
+    client.onDisconnect = () => {};
+    client.close();
+  }
   client = null;
   data = {};
   closeDialog();
@@ -180,7 +174,7 @@ async function connect(p) {
 }
 function login(error = "", kind = "error") {
   if (error) toast(error, kind, "login-error");
-  root.innerHTML = `<main class="auth-screen"><div class="auth-panel"><div class="auth-brand">${brand}${languageControl()}</div><h1>Connect to your DRouter</h1><p>Local device control</p><form id="login-form">${password("password", "Password", true)}<button class="primary auth-submit">Connect</button></form><div class="auth-foot"><span>Verified on this device</span>${button(theme() === "dark" ? "Light appearance" : "Dark appearance", "theme", 'class="quiet"')}</div></div></main>`;
+  root.innerHTML = `<main class="auth-screen"><div class="auth-panel"><div class="auth-brand">${brand}${languageControl()}</div><h1>Connect to your DRouter</h1><p>Enter your password.</p><form id="login-form">${password("password", "Password", true)}<button class="primary auth-submit">Connect</button></form></div></main>`;
   root.querySelector("form").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.currentTarget;
@@ -275,87 +269,76 @@ function render() {
   if (!client || !data.info) return;
   controlCleanup?.();
   controlCleanup = null;
-  const {
-    info: i,
-    health: h,
-    network: n,
-    receivers: r,
-    sources: s,
-    wifi: w,
-  } = data;
-  const outputs = r.filter((x) =>
-    x.config.label.toLowerCase().includes(outputSearch.toLowerCase()),
-  );
-  let content = "",
-    actions = "";
-  if (page === "Routing") {
-    content = `<div class="page-body" id="control-host"></div>`;
-  }
-  if (page === "Sources")
-    content = `<div class="page-body" id="control-host"></div>`;
-  if (page === "Devices") {
-    actions = button("Add receiver", "add-receiver", 'class="primary"');
-    content = `<div class="page-body"><div class="routing-tools">${search("Find an output", outputSearch, "output")}${button("Discover", "discover")}</div><div class="data-list">${outputs.map((x) => `<div class="list-row"><div class="list-main"><strong>${esc(x.config.label)}</strong><span class="secondary">${esc(x.model || "BirdDog decoder")}<span class="mobile-only mobile-address">${esc(x.config.ip)}</span></span></div><span class="address mono">${esc(x.config.ip)}</span>${status(x.state.online, x.state.online ? "Online" : "Offline")}<span class="route-name secondary">${esc(x.state.source || "Unavailable")}</span><div class="row-actions">${button("Rename", "rename-receiver", `data-id="${esc(x.config.id)}"`)}${button("Details", "receiver-detail", `class="quiet" data-id="${esc(x.config.id)}"`)}${button("Remove", "remove-receiver", `class="quiet danger" data-id="${esc(x.config.id)}"`)}</div></div>`).join("")}</div>${!r.length ? empty("Add your first receiver", "Discover compatible devices or register a BirdDog by IP.") : ""}</div>`;
-  }
+  const { info: i, health: h, network: n, wifi: w } = data;
+  let content = "";
   if (page === "Settings") {
     content = `<div class="page-body settings-single">
       <section class="settings-card" aria-label="Device"><h2>Device</h2>
         ${row("Device name", `<span class="inline-actions">${esc(i.name)}${button("Change", "change-name")}</span>`, "Also used for remote login")}
-        ${row("Appearance", button(theme() === "dark" ? "Dark" : "Light", "theme"))}
-        ${row("Device identity", `<span class="mono secondary">${esc(i.device_id.slice(0, 16))}…</span>`, "Stable across name changes")}
       </section>
-      <section class="settings-card" aria-label="Network"><h2>Network</h2>
-        ${row("Ethernet", status(n.ethernet.link, n.ethernet.ip || "Disconnected"))}
+      <details class="settings-card"><summary>Network</summary>
+        ${row("Ethernet", `<span data-ethernet-status>${status(n.ethernet.link, n.ethernet.ip || "Disconnected")}</span>`)}
         <form data-form="ethernet"><div class="form-grid">${["address", "mask", "gateway", "dns"].map((k) => field(k, { address: "IPv4 address", mask: "Subnet mask", gateway: "Gateway", dns: "DNS server" }[k], i.ethernet_config[k] || "")).join("")}</div><p class="help-text">Leave the address empty to use automatic DHCP.</p><div class="form-actions"><button class="primary">Save Ethernet</button></div></form>
         <h3>Wi-Fi</h3>
         ${button("Add network", "wifi-edit")}
         <div class="data-list list-spaced">${w.map((x, index) => `<div class="wifi-row ${x.enabled ? "" : "disabled"}" data-wifi="${esc(x.id)}"><span class="priority">${index + 1}</span><div class="wifi-copy"><strong>${esc(x.ssid)}</strong><span class="secondary">${n.wifi.connected && n.wifi.active === x.id ? "Connected" : x.enabled ? "Saved" : "Disabled"}</span></div><div class="wifi-actions">${button("↑", "wifi-up", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} up" ${index === 0 ? "disabled" : ""}`)}${button("↓", "wifi-down", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} down" ${index === w.length - 1 ? "disabled" : ""}`)}${button("Edit", "wifi-edit", `class="quiet edit-network" data-id="${x.id}"`)}<input type="checkbox" role="switch" data-toggle-wifi="${x.id}" aria-label="Enable ${esc(x.ssid)}" ${x.enabled ? "checked" : ""}>${button("Reconnect", "wifi-connect", `class="quiet" data-id="${x.id}" ${x.enabled ? "" : "disabled"}`)}${button("Remove", "wifi-remove", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div><p class="help-text">Passwords stay on this device. Use arrows to change priority.</p>
-      </section>
-      <section class="settings-card" aria-label="Remote access"><h2>Remote access</h2>
+      </details>
+      <details class="settings-card"><summary>Remote access</summary>
         ${row("Remote access", `<input type="checkbox" role="switch" data-toggle-cloud aria-label="Enable remote access" ${i.cloud_enabled ? "checked" : ""}>`, "Your device initiates the secure connection")}
-        ${row("Connection", `<span class="secondary">${esc(remoteStatus(n.cloud))}</span>`)}
+        ${row("Connection", `<span class="secondary" data-cloud-status>${esc(remoteStatus(n.cloud))}</span>`)}
         ${row("Registered name", `<span>${esc(n.registered_name || "Not registered yet")}</span>`)}
         ${row("Remote address", `<a href="${esc(i.server)}/?device=${encodeURIComponent(i.name)}" target="_blank" rel="noreferrer">${esc(i.server.replace(/^https?:\/\//, ""))}</a>`)}
         <details class="disclosure"><summary>Custom server</summary><form data-form="server">${field("server", "Server URL", i.server, "url", "required")}<div class="form-actions"><button>Save server</button></div></form></details>
-      </section>
-      <section class="settings-card" aria-label="Access"><h2>Access</h2><div id="control-host"></div></section>
-      <section class="settings-card" aria-label="Security"><h2>Security</h2>
+      </details>
+      <details class="settings-card"><summary>Security</summary>
         ${row("Administrator password", button("Change", "change-password"), "Verified only on this device")}
         ${row("Active sessions", button("Revoke all", "revoke"), "Sessions expire after 24 hours")}
         ${row("Identity recovery", button("Export recovery file", "identity-export"), "Keep the file private.")}
         ${row("Restore an identity", button("Restore…", "identity-restore"), "Requires your recovery file and a new password")}
-      </section>
-      <section class="settings-card" aria-label="System"><h2>System</h2>
+      </details>
+      <details class="settings-card"><summary>System</summary>
         ${row("Firmware", `<span class="mono">${esc(i.version)}</span>`)}
         ${row("Uptime", `<span class="mono">${Math.floor(h.uptime / 3600)}h ${Math.floor(h.uptime / 60) % 60}m</span>`)}
         ${row("Available memory", `<span class="mono">${h.free_memory ? Math.round(h.free_memory / 1024) + " KiB" : "Host managed"}</span>`)}
         ${row("Recorded errors", `<span>${h.errors}</span>`)}
         ${row("Factory reset", button("Erase device…", "reset", 'class="danger"'), "Export recovery first. Reserved names stay protected.")}
-      </section>
+      </details>
     </div>`;
   }
-  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong>${esc(i.name)}</strong><span class="secondary">Local</span></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${status(true, "Local connection")}${button(theme() === "dark" ? "☀" : "☾", "theme", 'class="quiet icon-button" aria-label="Change appearance"')}${button("↪", "logout", 'class="quiet icon-button" aria-label="Disconnect"')}</div></header><nav class="app-nav" aria-label="Main navigation">${Object.keys(
-    icons,
-  )
-    .map((t) =>
-      button(
-        icons[t] + `<span>${t}</span>`,
-        "page",
-        `data-nav="${t}" data-page="${t}" ${page === t ? 'aria-current="page"' : ""}`,
-      ),
-    )
-    .join(
-      "",
-    )}<button type="button" data-action="more" class="mobile-more" aria-controls="more-menu" aria-expanded="false">${icon('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>')}<span>More</span></button><div class="nav-footer">DRouter ${esc(i.version)}</div></nav><div class="more-backdrop" data-action="close-more" hidden aria-hidden="true"></div><div class="more-menu" id="more-menu" role="region" aria-label="More" hidden><div class="more-preferences">${languageControl()}${button("Change appearance", "theme", 'class="quiet"')}</div></div><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>${page}</h1></div><div class="page-actions">${actions}</div></header>${content}</main></div>`;
-  if (root.querySelector("#control-host"))
-    controlCleanup = mountControl(
+  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1></div></header><div class="page-body" id="control-host"></div></main>${page === "Settings" ? `<dialog class="dialog settings-dialog" id="settings-dialog" aria-label="Settings"><header class="dialog-header"><h2>Settings</h2>${button("×", "settings-close", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body"><section class="settings-card"><div id="access-host"></div></section>${content}${button("Disconnect", "logout", 'class="quiet"')}</div></dialog>` : ""}</div>`;
+  const cleanups = [
+    mountControl(
       root.querySelector("#control-host"),
       client,
-      page === "Settings" ? "Access Control" : page,
+      "Routing",
       async () => {
         data.info = await client.call("device.info");
       },
+    ),
+  ];
+  if (page === "Settings") {
+    cleanups.push(
+      mountControl(
+        root.querySelector("#access-host"),
+        client,
+        "Access Control",
+      ),
     );
+    const settingsDialog = root.querySelector("#settings-dialog");
+    settingsDialog.showModal();
+    settingsDialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      page = "Routing";
+      render();
+    });
+    settingsDialog.addEventListener("click", (event) => {
+      if (event.target === settingsDialog) {
+        page = "Routing";
+        render();
+      }
+    });
+  }
+  controlCleanup = () => cleanups.forEach((cleanup) => cleanup());
   root.querySelectorAll("[data-form]").forEach(
     (f) =>
       (f.onsubmit = (e) => {
@@ -418,22 +401,6 @@ async function action(d) {
     );
     return;
   }
-  if (d.action === "more") {
-    const menu = root.querySelector(".more-menu");
-    menu.hidden = !menu.hidden;
-    root.querySelector(".more-backdrop").hidden = menu.hidden;
-    d.element.setAttribute("aria-expanded", !menu.hidden);
-    if (!menu.hidden) menu.querySelector("button")?.focus();
-    return;
-  }
-  if (d.action === "close-more") {
-    root.querySelector(".more-menu").hidden = true;
-    root.querySelector(".more-backdrop").hidden = true;
-    const trigger = root.querySelector(".mobile-more");
-    trigger.setAttribute("aria-expanded", "false");
-    trigger.focus();
-    return;
-  }
   if (d.action === "event-toggle") {
     d.element.disabled = true;
     try {
@@ -445,9 +412,11 @@ async function action(d) {
     }
     return;
   }
-  if (d.action === "theme") {
-    toggleTheme();
-    if (client) render();
+  if (d.action === "settings-close") {
+    if (!busy) {
+      page = "Routing";
+      render();
+    }
     return;
   }
   if (d.action === "close-dialog") {
@@ -460,7 +429,7 @@ async function action(d) {
     window.scrollTo({ top: 0, behavior: "instant" });
     message = "";
     failure = "";
-    outputSearch = "";
+    if (page === "Settings") await refresh();
     render();
     return;
   }
@@ -493,62 +462,6 @@ async function action(d) {
         });
         setup();
       },
-    );
-    return;
-  }
-  if (d.action === "add-receiver") {
-    modal(
-      "Add receiver",
-      field("label", "Receiver name", "", "text", "required") +
-        field(
-          "ip",
-          "IPv4 address",
-          "",
-          "text",
-          'required inputmode="decimal"',
-        ) +
-        `<details class="disclosure"><summary>Advanced</summary>${field("port", "API port", "8080", "number", 'min="1" max="65535"')}${field("channel", "Channel", "1", "number", 'min="1" max="16"')}</details>`,
-      "Add receiver",
-      (f) =>
-        client.call("receivers.add", {
-          id: randomId(),
-          label: f.label,
-          ip: f.ip,
-          port: +f.port,
-          channel: +f.channel,
-        }),
-    );
-    return;
-  }
-  if (d.action === "receiver-detail") {
-    const r = data.receivers.find((x) => x.config.id === d.id);
-    modal(
-      r.config.label,
-      row("Address", `<span>${esc(r.config.ip)}:${r.config.port}</span>`) +
-        row(
-          "Current source",
-          `<span>${esc(r.state.source || "Unavailable")}</span>`,
-        ) +
-        `<div class="form-actions">${button("Rename", "rename-receiver", `data-id="${d.id}"`)}${button("Remove", "remove-receiver", `data-id="${d.id}" class="danger"`)}</div>`,
-    );
-    return;
-  }
-  if (d.action === "rename-receiver") {
-    const item = data.receivers.find((x) => x.config.id === d.id);
-    modal(
-      "Rename receiver",
-      field("name", "Name", item.config.label, "text", "required"),
-      "Save name",
-      (f) => client.call("receivers.rename", { id: d.id, name: f.name }),
-    );
-    return;
-  }
-  if (d.action === "remove-receiver") {
-    modal(
-      "Remove receiver?",
-      "<p>This removes the receiver from your DRouter.</p>",
-      "Remove",
-      () => client.call("receivers.remove", { id: d.id }),
     );
     return;
   }
@@ -705,14 +618,6 @@ document.addEventListener("click", (e) => {
   const b = e.target.closest("[data-action]");
   if (b && !b.disabled) void action({ ...b.dataset, element: b });
 });
-document.addEventListener("input", (e) => {
-  const id = e.target.dataset.search;
-  if (!id) return;
-  if (id === "output") outputSearch = e.target.value;
-  render();
-  const input = root.querySelector(`[data-search="${id}"]`);
-  input?.focus();
-});
 document.addEventListener("change", (e) => {
   if (e.target.matches("[data-toggle-wifi]"))
     void run(() =>
@@ -741,20 +646,48 @@ document.addEventListener("drouter-info", (event) => {
   const toggle = root.querySelector(".event-toggle");
   toggle?.setAttribute("aria-checked", !!data.info.event_mode);
 });
+// Update connection status without replacing an open settings dialog or its form values.
 setInterval(() => {
   if (
-    client &&
-    !busy &&
-    !dialog &&
-    !restrictedCleanup &&
-    !root.querySelector("form[data-form]:focus-within") &&
-    !root.querySelector(".inline-editor") &&
-    document.visibilityState === "visible"
+    !client ||
+    restrictedCleanup ||
+    page !== "Settings" ||
+    busy ||
+    dialog ||
+    document.querySelector(".control-dialog[open]") ||
+    document.visibilityState !== "visible"
   )
-    void refresh()
-      .then(render)
-      .catch(() => logout("Connection lost. Connect again."));
-}, 20000);
+    return;
+  const session = client;
+  void session
+    .call("network.status")
+    .then((network) => {
+      if (session !== client || page !== "Settings") return;
+      data.network = network;
+      const cloud = root.querySelector("[data-cloud-status]");
+      if (cloud) cloud.textContent = remoteStatus(network.cloud);
+      const ethernet = root.querySelector("[data-ethernet-status]");
+      if (ethernet)
+        ethernet.innerHTML = status(
+          network.ethernet.link,
+          network.ethernet.ip || "Disconnected",
+        );
+      for (const profile of data.wifi) {
+        const item = [...root.querySelectorAll("[data-wifi]")].find(
+          (el) => el.dataset.wifi === profile.id,
+        );
+        const state = item?.querySelector(".wifi-copy .secondary");
+        if (state)
+          state.textContent =
+            network.wifi.connected && network.wifi.active === profile.id
+              ? "Connected"
+              : profile.enabled
+                ? "Saved"
+                : "Disabled";
+      }
+    })
+    .catch(() => {});
+}, 10000);
 fetch("/bootstrap")
   .then((r) => r.json())
   .then((b) => (b.setup ? setup() : login()))
@@ -765,13 +698,3 @@ fetch("/bootstrap")
 installLocalization();
 
 window.addEventListener("pagehide", () => client?.close());
-
-// Dismiss the mobile overflow panel using the same interactions as the cloud UI.
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && root.querySelector(".more-menu:not([hidden])"))
-    void action({ action: "close-more" });
-});
-window.addEventListener("resize", () => {
-  if (innerWidth >= 900 && root.querySelector(".more-menu:not([hidden])"))
-    void action({ action: "close-more" });
-});

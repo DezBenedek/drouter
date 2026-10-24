@@ -186,15 +186,14 @@ export async function modification3({
     await p.goto(local);
     await p.getByLabel("Password", { exact: true }).fill(password);
     await p.getByRole("button", { name: "Connect", exact: true }).click();
-    await p.getByRole("button", { name: "Sources", exact: true }).click();
     await p
-      .getByRole("button", { name: "Rename", exact: true })
+      .getByRole("button", { name: "Edit source", exact: true })
       .first()
       .click();
     await p.getByLabel("Display name", { exact: true }).fill("Cancelled alias");
-    assert.equal(await p.getByRole("dialog").count(), 0);
+    assert.equal(await p.getByRole("dialog").count(), 1);
     await p
-      .locator(".inline-editor")
+      .locator("dialog[open]")
       .getByRole("button", { name: "Cancel", exact: true })
       .click();
     assert(
@@ -213,14 +212,8 @@ export async function modification3({
     p.on("pageerror", (error) =>
       console.error("Administrator browser:", error.message),
     );
-    await p.getByRole("button", { name: "Routing", exact: true }).click();
-    await p.locator(".other-source [data-control=pick]").first().waitFor();
-    await p.locator(".other-source [data-control=pick]").first().click();
-    await p.getByRole("dialog").getByRole("searchbox").fill("Graphics");
-    await p
-      .getByRole("dialog")
-      .getByRole("button", { name: other, exact: true })
-      .click();
+    await p.locator(".other-source select").first().waitFor();
+    await p.locator(".other-source select").first().selectOption(other);
     await p
       .getByRole("status")
       .filter({ hasText: "Routing verified" })
@@ -229,12 +222,18 @@ export async function modification3({
         console.error(await p.locator("body").innerText());
         throw error;
       });
-    await p.locator(".other-source [data-control=pick]").nth(1).click();
-    await p.getByRole("dialog").getByRole("searchbox").fill("Teacher PC");
-    await p
-      .getByRole("dialog")
-      .getByRole("button", { name: "Teacher PC", exact: true })
-      .click();
+    assert(
+      (
+        await p
+          .locator(".other-source select")
+          .nth(1)
+          .locator("option")
+          .allTextContents()
+      ).some(
+        (label) => label.includes("Teacher PC") && label.includes(sourceA),
+      ),
+    );
+    await p.locator(".other-source select").nth(1).selectOption(sourceA);
     await p
       .getByRole("status")
       .filter({ hasText: "Routing verified" })
@@ -252,37 +251,35 @@ export async function modification3({
     await p
       .getByRole("button", { name: "Create Simple Mode", exact: true })
       .click();
-    const editor = p.getByRole("dialog");
-    await editor
-      .getByLabel("Profile name", { exact: true })
-      .fill("Temporary profile");
+    const editor = p.locator(".profile-editor");
+    assert.equal(
+      await editor.locator('[name="name"], [name="icon"]').count(),
+      0,
+    );
     await editor.getByLabel("Password", { exact: true }).fill("rövi");
-    await editor.getByLabel("Label", { exact: true }).fill("Teacher");
+    await editor.getByLabel("Name", { exact: true }).fill("Teacher");
     await editor
-      .getByRole("button", { name: "Add button", exact: true })
+      .getByRole("button", { name: "+ Add button", exact: true })
       .click();
-    await editor.getByLabel("Label", { exact: true }).nth(1).fill("Camera");
+    await editor.getByLabel("Name", { exact: true }).nth(1).fill("Camera");
     await editor.getByRole("button", { name: "Save", exact: true }).click();
     await p
       .waitForFunction(
-        () => document.querySelectorAll("dialog[open]").length === 0,
+        () => document.querySelectorAll("dialog[open]").length === 1,
       )
       .catch(async (error) => {
         console.error(await p.locator("body").innerText());
         throw error;
       });
     let temporary = (await admin.call("simple.list")).find(
-      (p) => p.name === "Temporary profile",
+      (p) => p.name === "Teacher",
     );
     assert.equal(temporary.actions.length, 2);
-    const profileRow = p
-      .locator(".list-row")
-      .filter({ hasText: "Temporary profile" });
-    await profileRow
-      .getByRole("button", { name: "Disable", exact: true })
-      .click();
+    const profileRow = p.locator(".list-row").filter({ hasText: "Teacher" });
+    await profileRow.getByRole("switch").click();
     await p
-      .getByRole("dialog")
+      .locator("dialog[open]")
+      .last()
       .getByRole("button", { name: "Cancel", exact: true })
       .click();
     assert.equal(
@@ -294,12 +291,13 @@ export async function modification3({
       .getByRole("button", { name: "Delete", exact: true })
       .click();
     await p
-      .getByRole("dialog")
+      .locator("dialog[open]")
+      .last()
       .getByRole("button", { name: "Confirm", exact: true })
       .click();
     await p
       .waitForFunction(
-        () => document.querySelectorAll("dialog[open]").length === 0,
+        () => document.querySelectorAll("dialog[open]").length === 1,
       )
       .catch(async (error) => {
         console.error(await p.locator("body").innerText());
@@ -307,28 +305,28 @@ export async function modification3({
       });
     assert.equal((await admin.call("simple.list")).length, 2);
     pass(
-      "independent searchable Other source selectors route original identifiers without saving; profile editor saves multiple buttons directly and confirms destructive changes",
+      "independent Other device NDI dropdowns route original identifiers without saving; profile editor saves multiple buttons directly and confirms destructive changes",
     );
-    await p.getByRole("button", { name: "Settings", exact: true }).click();
-    await p.locator('a[href="mailto:benedek@dezso.hu"]').waitFor();
-    assert.equal(
-      await p.locator('a[href="mailto:benedek@dezso.hu"]').count(),
-      1,
-    );
+    await p.keyboard.press("Escape");
     await p.locator("[data-language]").first().selectOption("hu");
-    await p.getByRole("heading", { name: "Beállítások", exact: true }).waitFor();
+    await p.getByRole("button", { name: "Beállítások", exact: true }).click();
+    await p
+      .getByRole("heading", { name: "Beállítások", exact: true })
+      .waitFor();
     await p.screenshot({
       animations: "disabled",
       path: `${root}/docs/screenshots/access-control-hu.png`,
     });
+    await p.keyboard.press("Escape");
     await p.locator("[data-language]").first().selectOption("en");
+    await p.getByRole("button", { name: "Settings", exact: true }).click();
     await p.getByRole("button", { name: "Disconnect", exact: true }).click();
     await p.close();
   } finally {
     await browser.close();
   }
   pass(
-    "local and remote Hungarian login, persistent language, separate mobile Simple Mode, action feedback, source-edit cancel, and Contact",
+    "local and remote Hungarian login, persistent language, separate mobile Simple Mode, action feedback, source-edit cancel, and settings dialog",
   );
   await change("event.enable");
   assert.equal((await classroom.call("simple.actions.list")).locked, true);

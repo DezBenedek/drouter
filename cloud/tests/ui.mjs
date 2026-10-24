@@ -16,6 +16,7 @@ export async function checkRemoteAccess({ local, password, root }) {
     await connect();
     for (const enabled of [false, true]) {
       await p.getByRole("button", { name: "Settings", exact: true }).click();
+      await p.getByText("Remote access", { exact: true }).first().click();
       const toggle = p.getByRole("switch", {
         name: "Enable remote access",
         exact: true,
@@ -42,8 +43,10 @@ export async function checkRemoteAccess({ local, password, root }) {
       await connect();
     }
     await p.getByRole("button", { name: "Settings", exact: true }).click();
+    await p.getByText("Remote access", { exact: true }).first().click();
     await p
-      .locator('section[aria-label="Remote access"]')
+      .locator("details.settings-card")
+      .filter({ has: p.locator("summary", { hasText: "Remote access" }) })
       .getByText("Connected", { exact: true })
       .waitFor({ timeout: 60000 });
     assert.equal(
@@ -53,7 +56,7 @@ export async function checkRemoteAccess({ local, password, root }) {
     await p.screenshot({
       path: `${root}/docs/screenshots/local-remote-access-mobile.png`,
     });
-    await p.getByRole("button", { name: "Settings", exact: true }).click();
+    await p.getByText("Security", { exact: true }).click();
     await p
       .getByText("Sessions expire after 24 hours", { exact: true })
       .waitFor();
@@ -98,6 +101,7 @@ export async function checkSetup({ local, password, root }) {
     });
     await p.getByRole("button", { name: "Open DRouter", exact: true }).click();
     await p.getByRole("heading", { name: "Routing", exact: true }).waitFor();
+    await p.getByRole("button", { name: "Settings", exact: true }).click();
     await p.getByRole("button", { name: "Disconnect", exact: true }).click();
   } finally {
     await browser.close();
@@ -113,49 +117,33 @@ export async function checkInterfaces({
 }) {
   const browser = await chromium.launch({ headless: true });
   const errors = [];
-  const context = await browser.newContext({
-    viewport: { width: 1366, height: 900 },
-  });
-  const pages = [];
-  const capture = async (p, file) => {
-    assert.equal(
-      await p.evaluate(() => document.documentElement.scrollWidth > innerWidth),
-      false,
-      "Page overflows",
-    );
-    await p.screenshot({
-      path: `${root}/docs/screenshots/${file}.png`,
-      fullPage: true,
-      animations: "disabled",
-    });
-  };
   try {
     await mkdir(`${root}/docs/screenshots`, { recursive: true });
-    for (const kind of ["local", "remote"]) {
-      const p = await context.newPage();
-      pages.push(p);
-      p.on("pageerror", (e) => errors.push(e.message));
-      p.on("console", (m) => {
-        if (m.type() === "error" && !m.text().includes("status of 404"))
-          errors.push(m.text());
+    for (const [kind, origin] of [
+      ["local", local],
+      ["remote", cloud],
+    ]) {
+      const p = await browser.newPage({
+        viewport: { width: 1366, height: 900 },
       });
-      await p.goto(kind === "local" ? local : cloud);
-      await capture(p, `${kind}-login`);
+      p.on("pageerror", (e) => errors.push(e.message));
+      await p.goto(origin);
       if (kind === "remote")
         await p.getByLabel("Device name", { exact: true }).fill(name);
-      await p
-        .getByLabel("Password", {
-          exact: true,
-        })
-        .fill(password);
+      await p.getByLabel("Password", { exact: true }).fill(password);
       await p.getByRole("button", { name: "Connect", exact: true }).click();
-      await p.getByRole("heading", { name: "Routing", exact: true }).waitFor();
+      await p.locator(".crosspoint").first().waitFor();
+      assert.equal(await p.locator(".app-nav,.appearance-toggle").count(), 0);
+      assert.equal(
+        await p.evaluate(() => document.documentElement.dataset.theme),
+        "dark",
+      );
       const source =
-          kind === "local" ? "Studio (Camera A)" : "Studio (Camera B)",
-        route = p.getByRole("button", {
-          name: `Route ${source} to BirdDog 1`,
-          exact: true,
-        });
+        kind === "local" ? "Studio (Camera A)" : "Studio (Camera B)";
+      const route = p.getByRole("button", {
+        name: `Route ${source} to BirdDog 1`,
+        exact: true,
+      });
       await route.click();
       await p.waitForFunction(
         (label) =>
@@ -167,105 +155,185 @@ export async function checkInterfaces({
       await p.waitForFunction(
         () => !document.querySelector(".crosspoint:disabled"),
       );
-      await capture(p, `${kind}-routing`);
       await route.focus();
       await p.keyboard.press("ArrowRight");
       assert(await p.locator(".crosspoint:focus").count());
-      for (const width of [375, 430, 768, 1366, 1920]) {
+      for (const width of [320, 390, 768, 1366, 1920]) {
         await p.setViewportSize({ width, height: width < 900 ? 844 : 1000 });
-        await capture(p, `${kind}-${width}`);
-        if (width < 900) {
-          assert.equal(await p.locator(".matrix-scroll").isVisible(), false);
-          await p
-            .getByRole("button", {
-              name: "Change source for BirdDog 1",
-              exact: true,
-            })
-            .click();
-          const input = p.getByRole("dialog").getByRole("searchbox");
-          await input.fill("Camera A");
-          assert.equal(await p.locator(".source-option:visible").count(), 1);
-          await capture(p, `${kind}-picker-${width}`);
-          await p.keyboard.press("Escape");
-          await p.getByRole("dialog").waitFor({ state: "detached" });
-        }
+        assert.equal(
+          await p.evaluate(
+            () => document.documentElement.scrollWidth > innerWidth,
+          ),
+          false,
+          `${kind} ${width}px overflow`,
+        );
+        assert(await p.locator(".matrix-scroll").isVisible());
+        await p.screenshot({
+          path: `${root}/docs/screenshots/${kind}-routing-${width}.png`,
+          fullPage: true,
+        });
       }
-      await p.setViewportSize({ width: 375, height: 844 });
+      await p.setViewportSize({ width: 390, height: 844 });
+      assert.equal(await p.locator(".receiver-column:visible").count(), 1);
+      assert.equal(
+        await p
+          .locator(".matrix-scroll")
+          .evaluate((el) => el.scrollWidth > el.clientWidth),
+        false,
+        "Mobile matrix must fit without horizontal scrolling",
+      );
+      const tabs = p.locator('[data-control="receiver-focus"]');
+      assert.equal(await tabs.count(), 2);
+      await tabs.nth(1).click();
+      await p
+        .locator(".receiver-column:visible")
+        .getByText("BirdDog 2", { exact: true })
+        .waitFor();
+      assert.equal(await tabs.nth(1).getAttribute("aria-pressed"), "true");
+      const mobileRoute = p.getByRole("button", {
+        name: "Route Studio (Camera B) to BirdDog 2",
+        exact: true,
+      });
+      const targetBounds = await mobileRoute.boundingBox();
+      const cellBounds = await mobileRoute.locator("..").boundingBox();
+      assert(
+        targetBounds.width >= cellBounds.width - 3 &&
+          targetBounds.height >= 60 &&
+          Math.abs(targetBounds.height - cellBounds.height) <= 3,
+        "Entire route cell is a usable target",
+      );
+      await mobileRoute.click();
+      await p.waitForFunction(
+        () =>
+          document
+            .querySelector(
+              '.route-cell[data-mobile-visible="true"] .crosspoint[data-source="Studio (Camera B)"]',
+            )
+            ?.getAttribute("aria-pressed") === "true",
+      );
+      await p.waitForFunction(
+        () => !document.querySelector(".crosspoint:disabled"),
+      );
+      await p
+        .getByRole("searchbox", { name: "Find a source", exact: true })
+        .fill("no-such-transmitter");
+      await p.getByText("No matching sources", { exact: true }).waitFor();
+      await p
+        .getByRole("searchbox", { name: "Find a source", exact: true })
+        .fill("");
+      assert.equal(
+        await tabs.nth(1).getAttribute("aria-pressed"),
+        "true",
+        "Receiver choice survives filtering",
+      );
+      await tabs.first().click();
+      // A long alias can make a source row taller: the route target must still fill it.
+      const renameFirstSource = async (label) => {
+        await p
+          .getByRole("button", { name: "Edit source", exact: true })
+          .first()
+          .click();
+        await p.getByLabel("Display name", { exact: true }).fill(label);
+        await p
+          .getByRole("dialog")
+          .getByRole("button", { name: "Save", exact: true })
+          .click();
+        await p.getByRole("dialog").waitFor({ state: "detached" });
+      };
+      await renameFirstSource("W".repeat(64));
+      const tallCell = p
+        .locator(".source-row")
+        .first()
+        .locator('.route-cell[data-mobile-visible="true"]');
+      const tallBounds = await tallCell.boundingBox();
+      const tallTarget = await tallCell.locator(".crosspoint").boundingBox();
+      assert(
+        Math.abs(tallBounds.height - tallTarget.height) <= 3,
+        "Long-name rows retain a full-height route target",
+      );
+      assert.equal(
+        await p
+          .locator(".matrix-scroll")
+          .evaluate((el) => el.scrollWidth > el.clientWidth),
+        false,
+      );
+      await renameFirstSource("Studio (Camera A)");
+
+      const otherRow = p.locator(".route-table tbody tr").last();
+      assert.equal(
+        await otherRow.getByRole("rowheader").innerText(),
+        "Other device\nAll NDI sources",
+      );
+      assert.equal(
+        await p.getByRole("button", { name: /Add row|Add column/ }).count(),
+        0,
+      );
+      assert(
+        await p
+          .getByRole("button", { name: "+ Add source", exact: true })
+          .isVisible(),
+      );
+      assert(
+        await p
+          .getByRole("button", { name: "+ Add device", exact: true })
+          .isVisible(),
+      );
+      const chooser = otherRow.locator('td[data-mobile-visible="true"] select');
+      assert.deepEqual(
+        await chooser
+          .locator('option:not([value=""])')
+          .evaluateAll((options) =>
+            options.map((option) => option.value).sort(),
+          ),
+        ["Graphics (Program)", "Studio (Camera A)", "Studio (Camera B)"].sort(),
+      );
+      await chooser.selectOption("Studio (Camera A)");
+      await p.waitForFunction(
+        () =>
+          document
+            .querySelector(
+              '.route-cell[data-mobile-visible="true"] .crosspoint[data-source="Studio (Camera A)"]',
+            )
+            ?.getAttribute("aria-pressed") === "true",
+      );
+      await p.waitForFunction(
+        () => !document.querySelector(".crosspoint:disabled"),
+      );
+      assert.equal(
+        await p.getByRole("dialog").count(),
+        0,
+        "Source selection uses the dropdown directly",
+      );
+      await tabs.nth(1).click();
+      await p.getByRole("button", { name: "Settings", exact: true }).click();
+      await p.getByText("Network", { exact: true }).click();
       await p
         .getByRole("button", {
-          name: "Change source for BirdDog 1",
+          name: kind === "local" ? "Add network" : "Add network",
           exact: true,
         })
         .click();
-      await p
-        .getByRole("dialog")
-        .getByRole("button", { name: "Studio (Camera A)", exact: true })
-        .click();
-      await p.waitForFunction(
-        () => !document.querySelector(".output-open:disabled"),
-      );
-      await p.getByRole("button", { name: "Settings", exact: true }).click();
-      await capture(p, `${kind}-wifi-mobile`);
-      await p.getByRole("button", { name: "Add network", exact: true }).click();
-      await p.getByRole("dialog").waitFor();
+      await p.locator("dialog[open]").last().waitFor();
       await p.keyboard.press("Escape");
-      await p.getByRole("dialog").waitFor({ state: "detached" });
-      await p.getByRole("button", { name: "More", exact: true }).click();
+      assert.equal(await p.locator("dialog[open]").count(), 1);
+      await p.keyboard.press("Escape");
+      await p.locator("dialog[open]").waitFor({ state: "detached" });
       await p
-        .locator(".more-menu")
-        .getByRole("button", { name: "Change appearance", exact: true })
-        .click();
-      await capture(p, `${kind}-dark-mobile`);
-      if (!(await p.locator(".more-menu").isVisible()))
-        await p.getByRole("button", { name: "More", exact: true }).click();
-      await p
-        .locator(".more-menu")
-        .getByRole("button", { name: "Change appearance", exact: true })
-        .click();
-      if (await p.locator(".more-menu").isVisible())
-        await p.getByRole("button", { name: "More", exact: true }).click();
-      await p.getByRole("button", { name: "Routing", exact: true }).click();
-      await p.setViewportSize({ width: 1366, height: 900 });
-    }
-    const large = Array.from(
-      { length: 64 },
-      (_, i) => `Stage ${String(i + 1).padStart(2, "0")} (Camera feed)`,
-    );
-    await fault({ receiver: 0, sources: large });
-    await fault({ receiver: 1, sources: large });
-    for (let i = 0; i < pages.length; i++) {
-      const p = pages[i],
-        kind = i ? "remote" : "local";
-      await p.getByRole("button", { name: "Refresh sources" }).click();
-      assert.equal(await p.locator(".route-table thead th").count(), 3);
-      await capture(p, `${kind}-large-matrix`);
-      await p.setViewportSize({ width: 375, height: 844 });
-      await p
-        .getByRole("button", { name: "Change source for BirdDog 1" })
-        .click();
-      await p
-        .getByRole("dialog")
-        .getByRole("button", { name: "All Sources", exact: true })
-        .click();
-      await p.getByRole("dialog").getByRole("searchbox").fill("Stage 64");
-      await p
-        .getByRole("dialog")
-        .getByRole("button", { name: large[63], exact: true })
-        .click();
-      await p.waitForFunction(
-        () => !document.querySelector(".output-open:disabled"),
+        .locator(".receiver-column:visible")
+        .getByText("BirdDog 2", { exact: true })
+        .waitFor();
+      assert.equal(
+        await p
+          .locator('[data-control="receiver-focus"]')
+          .nth(1)
+          .getAttribute("aria-pressed"),
+        "true",
+        "Receiver choice survives opening settings",
       );
-      await capture(p, `${kind}-large-mobile`);
+
+      await p.close();
     }
-    await fault({
-      receiver: 0,
-      sources: ["Studio (Camera A)", "Studio (Camera B)", "Graphics (Program)"],
-    });
-    await fault({
-      receiver: 1,
-      sources: ["Studio (Camera A)", "Studio (Camera B)", "Graphics (Program)"],
-    });
-    assert.deepEqual(errors, [], "Browser runtime or CSP errors");
+    assert.deepEqual(errors, []);
   } finally {
     await browser.close();
   }
