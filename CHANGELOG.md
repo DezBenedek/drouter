@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.3] - 2026-10-26
+
+### Fixed
+
+- Remote access works (resolves the v0.2.2 known issue): `esp_websocket_client` 1.4's normal BEGIN/FINISH events are reported as `ESP_ERR_INVALID_ARG` by `esp-idf-svc` 0.52; ignore these unsupported lifecycle events while retaining transport-error handling. Allow 25 seconds for connection establishment and a separate 15 seconds for registration, with connection, registration and failure diagnostics.
+
+### Added
+
+- Onboard WS2812 status LED (GPIO21): blue blink in setup mode, fast amber blink when offline, solid green when online, solid cyan while the cloud relay is connected.
+- Access Control single-profile experience: header toggle switch, inline editor auto-opened for the first enabled profile, quick enable/disable without leaving the page. New "Buttons" label in English and Hungarian.
+
 ## [0.2.2] - 2026-10-26
 
 ### Added
@@ -14,7 +25,7 @@
 - Setup access-point password is the fixed `drouter123` instead of a random per-boot value.
 - Relay WebSocket timeouts raised on the ESP32 (connect 5s to 20s, task stack 8K to 12K) with a warning log on connect failure.
 
-### Known issues
+### Known issues (fixed in 0.2.3)
 
 - Remote access does not work: the ESP32 cannot establish the relay WebSocket to `drouter.dezso.hu` (`websocket not connected` loop). Under investigation.
 

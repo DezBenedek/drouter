@@ -882,10 +882,10 @@ export function mountControl(host, client, page, changed = () => {}) {
       order: 0,
     };
   }
-  function startSimpleCreate() {
+  function startSimpleCreate(defaultName = "") {
     editingId = "new";
     draft = {
-      name: "",
+      name: defaultName,
       password: "",
       actions: [blankSimpleAction()],
     };
@@ -994,6 +994,20 @@ export function mountControl(host, client, page, changed = () => {}) {
       lastMarkup = "";
       await refresh();
       await changed();
+      if (page === "Access Control" && data.profiles[0]) {
+        const single = data.profiles[0];
+        editingId = single.id;
+        draft = {
+          name: single.name || "",
+          password: "",
+          enabled: single.enabled,
+          actions: structuredClone(
+            single.actions?.length ? single.actions : [blankSimpleAction()],
+          ),
+        };
+        showPassword = false;
+        lastMarkup = "";
+      }
       task.done();
     } catch (error) {
       task.fail(t(error.message));
@@ -1005,6 +1019,24 @@ export function mountControl(host, client, page, changed = () => {}) {
   }
   function render() {
     if (disposed || !data) return;
+    if (
+      page === "Access Control" &&
+      !editingId &&
+      !draft &&
+      data.profiles[0]?.enabled
+    ) {
+      const single = data.profiles[0];
+      editingId = single.id;
+      draft = {
+        name: single.name || "",
+        password: "",
+        enabled: single.enabled,
+        actions: structuredClone(
+          single.actions?.length ? single.actions : [blankSimpleAction()],
+        ),
+      };
+      showPassword = false;
+    }
     if (editingId && draft) syncSimpleDraft();
     const markup = controlMarkup(data, page, {
       search,
@@ -1235,7 +1267,85 @@ export function mountControl(host, client, page, changed = () => {}) {
         return;
       }
       if (action === "simple-cancel") {
+        if (page === "Access Control") {
+          const single = data.profiles[0];
+          if (single && editingId === single.id) {
+            startSimpleEdit(single);
+            return;
+          }
+        }
         cancelSimpleEdit();
+        return;
+      }
+      if (action === "simple-single-toggle") {
+        const single = data.profiles[0];
+        if (editingId === "new" && draft) {
+          cancelSimpleEdit();
+          return;
+        }
+        if (draft && single && editingId === single.id) {
+          const id = single.id;
+          editingId = null;
+          draft = null;
+          showPassword = false;
+          lastMarkup = "";
+          working = true;
+          try {
+            const task = beginTask("Simple Mode");
+            await client.call("simple.update", {
+              id,
+              enabled: false,
+              confirmed: true,
+              expected_revision: data.info.revision,
+            });
+            lastMarkup = "";
+            await refresh();
+            await changed();
+            task.done();
+          } catch (error) {
+            await refresh().catch(() => {});
+            throw error;
+          } finally {
+            working = false;
+          }
+          lastMarkup = "";
+          render();
+          return;
+        }
+        if (!single) {
+          startSimpleCreate("Simple");
+          return;
+        }
+        if (!single.enabled) {
+          working = true;
+          try {
+            const task = beginTask("Simple Mode");
+            await client.call("simple.update", {
+              id: single.id,
+              enabled: true,
+              confirmed: true,
+              expected_revision: data.info.revision,
+            });
+            lastMarkup = "";
+            await refresh();
+            await changed();
+            task.done();
+          } catch (error) {
+            await refresh().catch(() => {});
+            throw error;
+          } finally {
+            working = false;
+          }
+          const updated =
+            data.profiles.find((p) => p.id === single.id) || data.profiles[0];
+          if (updated) startSimpleEdit(updated);
+          else {
+            lastMarkup = "";
+            render();
+          }
+          return;
+        }
+        startSimpleEdit(single);
         return;
       }
       if (action === "simple-show") {
@@ -1554,6 +1664,13 @@ function controlMarkup(data, page, state) {
       )
       .join("");
   };
+  const actionRow = (a, i) => `<div class="action-mapping" data-button="${i}">
+          <span class="action-number">${i + 1}</span>
+          <input name="label" value="${e(a.label || "")}" maxlength="64" required placeholder="${t("Label")}" aria-label="${t("Label")}" data-focus="simple-label-${i}" autocomplete="off">
+          <select name="receiver" aria-label="${t("Receiver")}" data-focus="simple-recv-${i}" required>${data.receivers.map((r) => `<option value="${e(r.config.id)}" ${r.config.id === a.receiver ? "selected" : ""}>${e(r.config.label)}</option>`).join("")}</select>
+          <select name="source" aria-label="${t("Source")}" data-focus="simple-src-${i}" required>${simpleSources(a.source)}</select>
+          <div class="mapping-row-actions">${b("↑", "simple-up", `aria-label="${t("Move button up")}" data-index="${i}" ${i === 0 ? "disabled" : ""}`)}${b("↓", "simple-down", `aria-label="${t("Move button down")}" data-index="${i}" ${i === draft.actions.length - 1 ? "disabled" : ""}`)}${b("×", "simple-remove", `aria-label="${t("Remove button")}" data-index="${i}" ${draft.actions.length === 1 ? "disabled" : ""}`)}</div>
+        </div>`;
   const simpleForm = (isNew) => {
     if (!draft) return "";
     const isEdit = !isNew;
@@ -1563,18 +1680,17 @@ function controlMarkup(data, page, state) {
         <label class="field"><span>${t("Password")}</span><span class="password-control"><input name="profile-password" type="${showPassword ? "text" : "password"}" autocomplete="new-password" ${isNew ? "required" : `placeholder="${e(t("Leave empty to keep the current password."))}"`} value="${e(draft.password || "")}" data-focus="simple-password" aria-label="${t("Password")}">${b(showPassword ? "Hide password" : "Show password", "simple-show", 'class="quiet"')}</span></label>
       </div>
       <div class="action-heading"><h3>${t("Button")}</h3><small>${draft.actions.length} / 10</small></div>
-      <div class="simple-action-list">${draft.actions
-        .map(
-          (a, i) => `<div class="action-mapping" data-button="${i}">
-          <span class="action-number">${i + 1}</span>
-          <input name="label" value="${e(a.label || "")}" maxlength="64" required placeholder="${t("Label")}" aria-label="${t("Label")}" data-focus="simple-label-${i}" autocomplete="off">
-          <select name="receiver" aria-label="${t("Output")}" data-focus="simple-recv-${i}" required>${data.receivers.map((r) => `<option value="${e(r.config.id)}" ${r.config.id === a.receiver ? "selected" : ""}>${e(r.config.label)}</option>`).join("")}</select>
-          <select name="source" aria-label="${t("Source")}" data-focus="simple-src-${i}" required>${simpleSources(a.source)}</select>
-          <div class="mapping-row-actions">${b("↑", "simple-up", `aria-label="${t("Move button up")}" data-index="${i}" ${i === 0 ? "disabled" : ""}`)}${b("↓", "simple-down", `aria-label="${t("Move button down")}" data-index="${i}" ${i === draft.actions.length - 1 ? "disabled" : ""}`)}${b("×", "simple-remove", `aria-label="${t("Remove button")}" data-index="${i}" ${draft.actions.length === 1 ? "disabled" : ""}`)}</div>
-        </div>`,
-        )
-        .join("")}</div>
+      <div class="simple-action-list">${draft.actions.map((a, i) => actionRow(a, i)).join("")}</div>
       <div class="form-actions simple-edit-actions">${b("+", "simple-add", `aria-label="${t("Add button")}" ${draft.actions.length >= 10 ? "disabled" : ""}`)}<span class="spacer"></span>${b("Cancel", "simple-cancel", 'class="quiet"')}<button type="button" data-control="simple-save" class="primary" ${working ? "disabled" : ""}>${t("Save")}</button></div>
+    </div>`;
+  };
+  const singleForm = (isNew) => {
+    if (!draft) return "";
+    return `<div class="simple-edit" data-simple-form="${isNew ? "new" : e(editingId)}">
+      <label class="field"><span>${t("Password")}</span><span class="password-control"><input name="profile-password" type="${showPassword ? "text" : "password"}" autocomplete="new-password" ${isNew ? "required" : `placeholder="${e(t("Leave empty to keep the current password."))}"`} value="${e(draft.password || "")}" data-focus="simple-password" aria-label="${t("Password")}">${b(showPassword ? "Hide password" : "Show password", "simple-show", 'class="quiet"')}</span></label>
+      <div class="action-heading"><div class="action-title" style="display:flex;align-items:baseline;gap:8px"><h3>${t("Buttons")}</h3><small>${draft.actions.length} / 10</small></div><span class="spacer" style="flex:1"></span>${b("+", "simple-add", `aria-label="${t("Add button")}" ${draft.actions.length >= 10 ? "disabled" : ""}`)}</div>
+      <div class="simple-action-list">${draft.actions.map((a, i) => actionRow(a, i)).join("")}</div>
+      <div class="form-actions simple-edit-actions"><span class="spacer"></span>${b("Cancel", "simple-cancel", 'class="quiet"')}<button type="button" data-control="simple-save" class="primary" ${working ? "disabled" : ""}>${t("Save")}</button></div>
     </div>`;
   };
   const simpleRow = (p) => {
@@ -1622,8 +1738,15 @@ function controlMarkup(data, page, state) {
   }
   if (page === "Simple Modes")
     return `<div class="form-actions">${b("Create Simple Mode", "profile-add", 'class="primary"')}</div>${editingId === "new" && draft ? simpleForm(true) : ""}<div class="data-list profile-list">${data.profiles.map((p) => simpleRow(p)).join("") || empty("No Simple Modes configured")}</div>`;
-  if (page === "Access Control")
-    return `<div class="access-heading"><h2>${t("Simple Mode")}</h2>${editingId ? "" : b("+", "profile-add", `class="primary" aria-label="${t("Create Simple Mode")}"` )}</div>${editingId === "new" && draft ? simpleForm(true) : ""}<div class="data-list profile-list">${data.profiles.map((p) => simpleRow(p)).join("") || (editingId === "new" ? "" : empty("No Simple Modes configured"))}</div>`;
+  if (page === "Access Control") {
+    const single = data.profiles[0];
+    const singleEditing = !!(
+      draft &&
+      (editingId === "new" || (single && editingId === single.id))
+    );
+    const singleOn = !!(singleEditing || (single && single.enabled));
+    return `<div class="access-heading"><h2>${t("Simple Mode")}</h2><button type="button" data-control="simple-single-toggle" class="event-toggle" role="switch" aria-checked="${singleOn}" aria-label="${t("Simple Mode")}"${working ? " disabled" : ""}><span class="switch-track" aria-hidden="true"></span></button></div>${singleEditing ? singleForm(editingId === "new") : ""}${!singleEditing && !single ? empty("No Simple Modes configured") : ""}`;
+  }
   if (page !== "Routing") return "";
   const receivers = data.receivers.filter((r) =>
     `${r.config.label} ${r.config.ip}`
