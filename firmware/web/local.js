@@ -131,6 +131,9 @@ async function run(task, close = false) {
     busy = false;
     dialog?.querySelectorAll("button").forEach((b) => (b.disabled = false));
     render();
+    document.dispatchEvent(
+      new CustomEvent("drouter-controls-refresh", { detail: { client } }),
+    );
     if (failure || message)
       toast(
         failure || message,
@@ -144,6 +147,8 @@ async function run(task, close = false) {
 function logout(text = "", kind = "error") {
   page = "Routing";
   dismissToast();
+  settingsCleanup?.();
+  settingsCleanup = null;
   controlCleanup?.();
   restrictedCleanup?.();
   restrictedCleanup = null;
@@ -265,14 +270,9 @@ function setup() {
     }
   };
 }
-function render() {
-  if (!client || !data.info) return;
-  controlCleanup?.();
-  controlCleanup = null;
+function settingsContent() {
   const { info: i, health: h, network: n, wifi: w } = data;
-  let content = "";
-  if (page === "Settings") {
-    content = `<div class="page-body settings-single">
+  return `<div class="page-body settings-single">
       <section class="settings-card"><div id="access-host"></div></section>
       <section class="settings-card" aria-label="Device"><h2>Device</h2>
         ${row("Device name", `<span class="inline-actions">${esc(i.name)}${button("Change", "change-name")}</span>`, "Also used for remote login")}
@@ -280,8 +280,7 @@ function render() {
       <details class="settings-card"><summary>Network</summary>
         ${row("Ethernet", `<span data-ethernet-status>${status(n.ethernet.link, n.ethernet.ip || "Disconnected")}</span>`)}
         <form data-form="ethernet"><div class="form-grid">${["address", "mask", "gateway", "dns"].map((k) => field(k, { address: "IPv4 address", mask: "Subnet mask", gateway: "Gateway", dns: "DNS server" }[k], i.ethernet_config[k] || "")).join("")}</div><p class="help-text">Leave the address empty to use automatic DHCP.</p><div class="form-actions"><button class="primary">Save Ethernet</button></div></form>
-        <h3>Wi-Fi</h3>
-        ${button("Add network", "wifi-edit")}
+        <div class="wifi-head"><h3>Wi-Fi</h3>${button("+", "wifi-edit", 'class="quiet icon-button" aria-label="Add network"')}</div>
         <div class="data-list list-spaced">${w.map((x, index) => `<div class="wifi-row ${x.enabled ? "" : "disabled"}" data-wifi="${esc(x.id)}"><span class="priority">${index + 1}</span><div class="wifi-copy"><strong>${esc(x.ssid)}</strong><span class="secondary">${n.wifi.connected && n.wifi.active === x.id ? "Connected" : x.enabled ? "Saved" : "Disabled"}</span></div><div class="wifi-actions">${button("↑", "wifi-up", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} up" ${index === 0 ? "disabled" : ""}`)}${button("↓", "wifi-down", `class="quiet icon-button" data-id="${x.id}" aria-label="Move ${esc(x.ssid)} down" ${index === w.length - 1 ? "disabled" : ""}`)}${button("Edit", "wifi-edit", `class="quiet edit-network" data-id="${x.id}"`)}<input type="checkbox" role="switch" data-toggle-wifi="${x.id}" aria-label="Enable ${esc(x.ssid)}" ${x.enabled ? "checked" : ""}>${button("Reconnect", "wifi-connect", `class="quiet" data-id="${x.id}" ${x.enabled ? "" : "disabled"}`)}${button("Remove", "wifi-remove", `class="quiet danger" data-id="${x.id}"`)}</div></div>`).join("")}</div><p class="help-text">Passwords stay on this device. Use arrows to change priority.</p>
       </details>
       <details class="settings-card"><summary>Remote access</summary>
@@ -305,43 +304,68 @@ function render() {
         ${row("Factory reset", button("Erase device…", "reset", 'class="danger"'), "Export recovery first. Reserved names stay protected.")}
       </details>
     </div>`;
+}
+let settingsCleanup = null;
+function closeSettingsDialog() {
+  settingsCleanup?.();
+  settingsCleanup = null;
+  root.querySelector("#settings-dialog")?.remove();
+}
+function ensureShell() {
+  if (root.querySelector(".app-shell")) return;
+  const { info: i } = data;
+  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1></div></header><div class="page-body" id="control-host"></div></main></div>`;
+  controlCleanup?.();
+  controlCleanup = mountControl(
+    root.querySelector("#control-host"),
+    client,
+    "Routing",
+    async () => {
+      data.info = await client.call("device.info");
+    },
+  );
+}
+function renderSettingsDialog() {
+  if (page !== "Settings") {
+    closeSettingsDialog();
+    return;
   }
-  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1></div></header><div class="page-body" id="control-host"></div></main>${page === "Settings" ? `<dialog class="dialog settings-dialog" id="settings-dialog" aria-label="Settings"><header class="dialog-header"><h2>Settings</h2>${button("×", "settings-close", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body">${content}${button("Disconnect", "logout", 'class="quiet"')}</div></dialog>` : ""}</div>`;
-  const cleanups = [
-    mountControl(
-      root.querySelector("#control-host"),
-      client,
-      "Routing",
-      async () => {
-        data.info = await client.call("device.info");
-      },
-    ),
-  ];
-  if (page === "Settings") {
-    cleanups.push(
-      mountControl(
-        root.querySelector("#access-host"),
-        client,
-        "Access Control",
-      ),
-    );
-    const settingsDialog = root.querySelector("#settings-dialog");
-    settingsDialog.showModal();
-    cleanups.push(installSettingsSidebar(settingsDialog, client));
+  let settingsDialog = root.querySelector("#settings-dialog");
+  if (!settingsDialog) {
+    settingsDialog = document.createElement("dialog");
+    settingsDialog.className = "dialog settings-dialog";
+    settingsDialog.id = "settings-dialog";
+    settingsDialog.setAttribute("aria-label", "Settings");
+    settingsDialog.innerHTML = `<header class="dialog-header"><h2>Settings</h2>${button("×", "settings-close", 'class="quiet icon-button" aria-label="Close"')}</header><div class="dialog-body" id="settings-body"></div>`;
+    root.querySelector(".app-shell").append(settingsDialog);
     settingsDialog.addEventListener("cancel", (event) => {
       event.preventDefault();
-      page = "Routing";
-      render();
-    });
-    settingsDialog.addEventListener("click", (event) => {
-      if (event.target === settingsDialog) {
+      if (!busy) {
         page = "Routing";
-        render();
+        renderSettingsDialog();
       }
     });
+    settingsDialog.addEventListener("click", (event) => {
+      if (event.target === settingsDialog && !busy) {
+        page = "Routing";
+        renderSettingsDialog();
+      }
+    });
+    if (!settingsDialog.open) settingsDialog.showModal();
   }
-  controlCleanup = () => cleanups.forEach((cleanup) => cleanup());
-  root.querySelectorAll("[data-form]").forEach(
+  settingsDialog.querySelector("#settings-body").innerHTML =
+    `${settingsContent()}${button("Disconnect", "logout", 'class="quiet"')}`;
+  settingsCleanup?.();
+  const cleanups = [
+    mountControl(
+      settingsDialog.querySelector("#access-host"),
+      client,
+      "Access Control",
+    ),
+    installSettingsSidebar(settingsDialog, client),
+  ];
+  settingsCleanup = () => cleanups.forEach((cleanup) => cleanup());
+  settingsDialog.querySelectorAll("[data-form]").forEach(
     (f) =>
       (f.onsubmit = (e) => {
         e.preventDefault();
@@ -360,6 +384,13 @@ function render() {
         );
       }),
   );
+}
+function render() {
+  if (!client || !data.info) return;
+  ensureShell();
+  const nameEl = root.querySelector("[data-user-content]");
+  if (nameEl) nameEl.textContent = data.info.name;
+  renderSettingsDialog();
 }
 async function settings(values) {
   return client.call("settings.update", {
@@ -417,7 +448,7 @@ async function action(d) {
   if (d.action === "settings-close") {
     if (!busy) {
       page = "Routing";
-      render();
+      renderSettingsDialog();
     }
     return;
   }

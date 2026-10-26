@@ -1,6 +1,6 @@
 [package]
 name = "drouter-firmware"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 build = "build.rs"
 
@@ -42,3 +42,6 @@ esp_idf_sdkconfig_defaults = ["firmware/sdkconfig.defaults"]
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_websocket_client", version = "1.4.0" }
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/mdns", version = "1.8.2" }

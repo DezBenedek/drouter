@@ -436,29 +436,33 @@ fn remote_loop(shared: Shared) {
             crt_bundle_attach: Some(sys::esp_crt_bundle_attach),
             skip_cert_common_name_check: false,
             buffer_size: MAX_MESSAGE,
-            task_stack: 8192,
-            network_timeout_ms: Duration::from_secs(10),
+            task_stack: 12288,
+            network_timeout_ms: Duration::from_secs(20),
             ping_interval_sec: Duration::from_secs(300),
             ..Default::default()
         };
         shared.lock().unwrap().network.cloud = "connecting".into();
-        let websocket = EspWebSocketClient::new(&url, &cfg, Duration::from_secs(5), move |event| {
-            let message = match event {
-                Ok(event) => match &event.event_type {
-                    WebSocketEventType::Text(text) if text.len() <= MAX_MESSAGE => {
-                        Some(text.to_string())
-                    }
-                    WebSocketEventType::Disconnected | WebSocketEventType::Closed => {
-                        Some(String::new())
-                    }
-                    _ => None,
-                },
-                Err(_) => Some(String::new()),
-            };
-            if let Some(message) = message {
-                let _ = tx.try_send(message);
-            }
-        });
+        let websocket =
+            EspWebSocketClient::new(&url, &cfg, Duration::from_secs(20), move |event| {
+                let message = match event {
+                    Ok(event) => match &event.event_type {
+                        WebSocketEventType::Text(text) if text.len() <= MAX_MESSAGE => {
+                            Some(text.to_string())
+                        }
+                        WebSocketEventType::Disconnected | WebSocketEventType::Closed => {
+                            Some(String::new())
+                        }
+                        _ => None,
+                    },
+                    Err(_) => Some(String::new()),
+                };
+                if let Some(message) = message {
+                    let _ = tx.try_send(message);
+                }
+            });
+        if websocket.is_err() {
+            log::warn!("Remote websocket connect failed, retrying");
+        }
         if let Ok(mut ws) = websocket {
             let started = Instant::now();
             let mut registered = false;
@@ -644,9 +648,15 @@ pub fn run() -> Result<()> {
         )?,
     )?;
     eth.start()?;
-    let ap_password = drouter_auth::random_hex(12);
-    let ssid = format!("DRouter-Setup-{:02X}{:02X}", mac[4], mac[5]);
-    let ap = AccessPointConfiguration {
+    let ap_password = String::from("drouter123");
+    // Persistent device AP: `DRouter-<name>` once set up, setup SSID before that.
+    // The device name is ASCII-only; truncate so the SSID stays within 32 bytes.
+    let mut ap_name = initial.as_ref().map(|c| c.name.clone());
+    let mut ssid = match &ap_name {
+        Some(name) => format!("DRouter-{}", &name[..name.len().min(24)]),
+        None => format!("DRouter-Setup-{:02X}{:02X}", mac[4], mac[5]),
+    };
+    let mut ap = AccessPointConfiguration {
         ssid: ssid.as_str().try_into().unwrap(),
         password: ap_password.as_str().try_into().unwrap(),
         auth_method: AuthMethod::WPA2Personal,
@@ -661,12 +671,42 @@ pub fn run() -> Result<()> {
     esp_idf_svc::sys::esp!(unsafe {
         sys::esp_wifi_set_storage(sys::wifi_storage_t_WIFI_STORAGE_RAM)
     })?;
+    // The AP stays up together with the station client (AP+STA), so the
+    // admin UI is always reachable on the device network at drouter.local.
+    let mut ap_enabled = true;
     wifi.set_configuration(&wifi_configuration(&ap, None)?)?;
     wifi.start()?;
+    let mdns_hostname = String::from("drouter");
+    let mdns_instance = initial.as_ref().map_or_else(
+        || "DRouter Setup".to_string(),
+        |c| format!("DRouter {}", c.name),
+    );
+    let mut _mdns = match esp_idf_svc::mdns::EspMdns::take() {
+        Ok(mut mdns) => {
+            if let Err(e) = mdns.set_hostname(&mdns_hostname) {
+                log::warn!("mDNS hostname failed: {e}");
+            }
+            if let Err(e) = mdns.set_instance_name(&mdns_instance) {
+                log::warn!("mDNS instance failed: {e}");
+            }
+            if let Err(e) = mdns.add_service(None, "_http", "_tcp", 80, &[]) {
+                log::warn!("mDNS http service failed: {e}");
+            }
+            Some(mdns)
+        }
+        Err(e) => {
+            log::warn!("mDNS init failed: {e}");
+            None
+        }
+    };
 
-    println!("Physical recovery: hold BOOT for 3 seconds to reveal the setup AP credentials; hold for 12 seconds to erase configuration.");
+    println!("Physical recovery: hold BOOT for 3 seconds to reveal the AP credentials; hold for 12 seconds to erase configuration.");
     if initial.is_none() {
-        println!("Setup SSID: {ssid}\nSetup AP password: {ap_password}\nOpen http://192.168.4.1");
+        println!(
+            "Setup SSID: {ssid}\nSetup AP password: {ap_password}\nOpen http://drouter.local or http://192.168.71.1"
+        );
+    } else {
+        println!("Device AP SSID: {ssid}\nAP password: {ap_password}\nAdmin: http://drouter.local");
     }
     device.network.cloud = if initial.as_ref().is_some_and(|c| c.cloud_enabled) {
         "offline"
@@ -701,8 +741,6 @@ pub fn run() -> Result<()> {
         .unwrap_or_default();
     let mut held: Option<Instant> = None;
     let mut revealed = false;
-    let mut ap_enabled = true;
-    let mut ap_until = 300;
     let mut actual_signature = String::new();
     loop {
         subscription.feed()?;
@@ -721,7 +759,6 @@ pub fn run() -> Result<()> {
                 if let Err(e) = apply_wifi(&mut wifi, &ap, profile, true) {
                     log::warn!("Recovery AP configuration failed: {e}");
                 }
-                ap_until = shared.lock().unwrap().now() + 300;
                 connect_at = shared.lock().unwrap().now();
                 scan_at = 0;
             }
@@ -749,6 +786,26 @@ pub fn run() -> Result<()> {
             d.config.clone()
         };
         if let Some(c) = snapshot {
+            // Follow setup/renames: the device AP SSID tracks the device name,
+            // the admin stays at http://drouter.local.
+            if ap_name.as_ref() != Some(&c.name) {
+                ap_name = Some(c.name.clone());
+                ssid = format!("DRouter-{}", &c.name[..c.name.len().min(24)]);
+                if let Ok(cfg) = ssid.as_str().try_into() {
+                    ap.ssid = cfg;
+                    let profile = c
+                        .wifi
+                        .iter()
+                        .find(|p| Some(&p.id) == actual_profile.as_ref());
+                    if let Err(e) = apply_wifi(&mut wifi, &ap, profile, true) {
+                        log::warn!("Wi-Fi AP rename failed: {e}");
+                    }
+                    if let Some(mdns) = _mdns.as_mut() {
+                        let _ = mdns.set_instance_name(format!("DRouter {}", c.name));
+                    }
+                    println!("Device AP SSID: {ssid}\nAdmin: http://drouter.local");
+                }
+            }
             let now = shared.lock().unwrap().now();
             let serialized = serde_json::to_string(&c.ethernet)?;
             if serialized != ethernet_config {
@@ -771,17 +828,6 @@ pub fn run() -> Result<()> {
                 shared.lock().unwrap().network.wifi.active = None;
                 scan_at = 0;
                 failed_until.clear();
-            }
-            if ap_enabled && now >= ap_until {
-                let profile = c
-                    .wifi
-                    .iter()
-                    .find(|p| Some(&p.id) == actual_profile.as_ref());
-                if let Err(e) = apply_wifi(&mut wifi, &ap, profile, false) {
-                    log::warn!("Wi-Fi AP transition failed: {e}");
-                }
-                ap_enabled = false;
-                connect_at = now;
             }
             if actual_profile.is_some()
                 && !wifi.is_up().unwrap_or(false)

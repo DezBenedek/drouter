@@ -261,7 +261,7 @@ small,
 }
 .app-shell {
   display: block;
-  min-height: 100dvh;
+  min-height: calc(100dvh - var(--activity-bar-height, 0px));
 }
 .app-topbar {
   position: sticky;
@@ -1192,7 +1192,6 @@ summary::after {
 .wifi-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
@@ -1210,12 +1209,24 @@ summary::after {
 .wifi-copy span {
   font-size: 11px;
 }
+.wifi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 22px 0 0;
+}
+.wifi-head h3 {
+  margin: 0;
+}
 .wifi-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 5px;
-  width: 100%;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .wifi-actions button {
   font-size: 11px;
@@ -1327,7 +1338,7 @@ summary::after {
   padding: 30px 0;
 }
 .auth-screen {
-  min-height: 100dvh;
+  min-height: calc(100dvh - var(--activity-bar-height, 0px));
   display: grid;
   place-items: center;
   padding: 32px 20px;

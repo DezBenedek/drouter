@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.2] - 2026-10-26
+
+### Added
+
+- mDNS on the ESP32 (`espressif/mdns 1.8.2`): the admin UI is reachable at `http://drouter.local` with an advertised `_http` service, on the setup network and on the station network.
+- Persistent device access point after setup: `DRouter-<device-name>` (WPA2, alongside the station client), following renames without reboot.
+- Relay diagnostics: `GET /relay/health` returns service status on the Worker.
+- Local settings dialog no longer remounts the routing table; the Wi-Fi section has a single `+` button in the header row with the actions beside each entry.
+
+### Changed
+
+- Setup access-point password is the fixed `drouter123` instead of a random per-boot value.
+- Relay WebSocket timeouts raised on the ESP32 (connect 5s to 20s, task stack 8K to 12K) with a warning log on connect failure.
+
+### Known issues
+
+- Remote access does not work: the ESP32 cannot establish the relay WebSocket to `drouter.dezso.hu` (`websocket not connected` loop). Under investigation.
+
 ## Unreleased
 
 - Replace Pico with locally bundled Oat UI 1.0.0 in both interfaces; remove the Sass build step.
