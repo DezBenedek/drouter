@@ -3,7 +3,7 @@
 Standalone Rust NDI routing controller **Waveshare ESP32-S3-ETH** boardra, opcionális Cloudflare távoli eléréssel.
 
 - Repo: [DezBenedek/drouter](https://github.com/DezBenedek/drouter)
-- Aktuális release: **v0.2.3** (lásd: [CHANGELOG](https://github.com/DezBenedek/drouter/blob/main/CHANGELOG.md))
+- Aktuális release: **v0.2.4** (lásd: [CHANGELOG](https://github.com/DezBenedek/drouter/blob/main/CHANGELOG.md))
 
 ## Oldalak
 

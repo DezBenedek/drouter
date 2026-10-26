@@ -6,7 +6,7 @@ The macOS simulator runs the same authentication, validation, routing, preset, W
 
 ![Remote routing interface](docs/screenshots/remote-redesign-desktop.png)
 
-Latest release: [v0.2.3](https://github.com/DezBenedek/drouter/releases/tag/v0.2.3) · [ESP32-S3 firmware image](https://github.com/DezBenedek/drouter/releases/download/v0.2.3/drouter-esp32s3.bin) · [SHA256SUMS](https://github.com/DezBenedek/drouter/releases/download/v0.2.3/SHA256SUMS).
+Latest release: [v0.2.4](https://github.com/DezBenedek/drouter/releases/tag/v0.2.4) · [ESP32-S3 firmware image](https://github.com/DezBenedek/drouter/releases/download/v0.2.4/drouter-esp32s3.bin) · [SHA256SUMS](https://github.com/DezBenedek/drouter/releases/download/v0.2.4/SHA256SUMS).
 
 ## Repository
 
