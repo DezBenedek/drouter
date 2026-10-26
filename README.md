@@ -228,6 +228,7 @@ To return every partition to blank flash, `espflash erase-flash --port /dev/cu.u
 | CS | 14 |
 | Reset | 9 |
 | Interrupt | 10 |
+| Status LED (WS2812) | 21 |
 
 These assignments come from the [official Waveshare board documentation](https://docs.waveshare.com/ESP32-S3-ETH/Development-Environment-Setup-ESP-IDF). SPI2 runs at 20 MHz with DMA. No flash/PSRAM pins are repurposed. Wi-Fi and Ethernet coexist; Wi-Fi's default-route priority is higher for internet access, while connected Ethernet subnets carry BirdDog traffic. Use distinct, non-overlapping subnets when both interfaces are active.
 

@@ -23,3 +23,12 @@ W5500 SPI Ethernet, DHCP alapból. Ha Ethernet és Wi-Fi egyszerre megy, **kül�
 
 - **3 mp nyomva**: felfedi az AP adatokat az USB logban.
 - **12 mp nyomva**: konfig törlés + restart (új identitás, setup elölről). A foglalt relay nevek ettől még védettek maradnak.
+
+## Státusz LED
+
+Onboard WS2812 (GPIO21):
+
+- kék villogás (1 Hz): setup mód, nincs konfig
+- narancs gyors villogás: van konfig, de nincs net
+- zöld folyamatos: online (STA/Ethernet él)
+- cián folyamatos: cloud relay csatlakozva

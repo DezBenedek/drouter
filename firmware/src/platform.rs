@@ -390,7 +390,73 @@ fn create_server(shared: Shared) -> Result<EspHttpServer<'static>> {
     }
     Ok(server)
 }
+/// Onboard WS2812 status LED (GPIO21) driven over RMT in its own thread.
+///
+/// - setup mode (no config): blue blink
+/// - configured but offline: amber fast blink
+/// - online: green solid, cyan solid while the cloud relay is connected
+fn status_led_loop(shared: Shared) {
+    unsafe {
+        let mut strip_config: sys::led_strip_config_t = core::mem::zeroed();
+        strip_config.strip_gpio_num = 21;
+        strip_config.max_leds = 1;
+        strip_config.led_model = sys::led_model_t_LED_MODEL_WS2812;
+        // GRB order, 3 components: {.r_pos=1, .g_pos=0, .b_pos=2, .w_pos=3, .num_components=3}
+        strip_config.color_component_format.format_id = 0x600000E1;
+        let mut rmt_config: sys::led_strip_rmt_config_t = core::mem::zeroed();
+        rmt_config.clk_src = sys::soc_periph_rmt_clk_src_t_RMT_CLK_SRC_DEFAULT;
+        rmt_config.resolution_hz = 10_000_000;
+        rmt_config.mem_block_symbols = 64;
+        let mut handle: sys::led_strip_handle_t = core::ptr::null_mut();
+        if sys::led_strip_new_rmt_device(&strip_config, &rmt_config, &mut handle) != sys::ESP_OK
+            || handle.is_null()
+        {
+            log::warn!("Status LED init failed");
+            return;
+        }
+        let set = |r: u8, g: u8, b: u8| {
+            sys::led_strip_set_pixel(handle, 0, r as u32, g as u32, b as u32);
+            sys::led_strip_refresh(handle);
+        };
+        set(0, 0, 0);
+        let mut tick: u32 = 0;
+        loop {
+            let (has_config, online, cloud) = {
+                let d = shared.lock().unwrap();
+                (
+                    d.config.is_some(),
+                    d.network.online(),
+                    d.network.cloud.clone(),
+                )
+            };
+            if !has_config {
+                if tick % 10 < 5 {
+                    set(0, 0, 40);
+                } else {
+                    set(0, 0, 0);
+                }
+            } else if !online {
+                if tick % 4 < 2 {
+                    set(40, 20, 0);
+                } else {
+                    set(0, 0, 0);
+                }
+            } else if cloud == "connected" {
+                set(0, 30, 30);
+            } else {
+                set(0, 35, 0);
+            }
+            tick = tick.wrapping_add(1);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
 fn remote_loop(shared: Shared) {
+    enum RemoteEvent {
+        Connected,
+        Text(String),
+        Disconnected,
+    }
     let mut backoff = remote::Backoff::default();
     loop {
         let config = {
@@ -446,25 +512,40 @@ fn remote_loop(shared: Shared) {
             EspWebSocketClient::new(&url, &cfg, Duration::from_secs(20), move |event| {
                 let message = match event {
                     Ok(event) => match &event.event_type {
-                        WebSocketEventType::Text(text) if text.len() <= MAX_MESSAGE => {
-                            Some(text.to_string())
+                        WebSocketEventType::Connected => {
+                            log::info!("Remote websocket connected; awaiting registration");
+                            Some(RemoteEvent::Connected)
                         }
-                        WebSocketEventType::Disconnected | WebSocketEventType::Closed => {
-                            Some(String::new())
+                        WebSocketEventType::Text(text) if text.len() <= MAX_MESSAGE => {
+                            Some(RemoteEvent::Text(text.to_string()))
+                        }
+                        WebSocketEventType::Disconnected
+                        | WebSocketEventType::Close(_)
+                        | WebSocketEventType::Closed => {
+                            log::info!("Remote websocket disconnected");
+                            Some(RemoteEvent::Disconnected)
                         }
                         _ => None,
                     },
-                    Err(_) => Some(String::new()),
+                    // esp_websocket_client 1.4 emits BEGIN/FINISH lifecycle events.
+                    // esp-idf-svc 0.52 does not map these and returns INVALID_ARG.
+                    // Treating BEGIN as a transport failure drops the client before TLS.
+                    Err(error) if error.0.code() == sys::ESP_ERR_INVALID_ARG => None,
+                    Err(error) => {
+                        log::warn!("Remote websocket event failed: {error}");
+                        Some(RemoteEvent::Disconnected)
+                    }
                 };
                 if let Some(message) = message {
                     let _ = tx.try_send(message);
                 }
             });
-        if websocket.is_err() {
-            log::warn!("Remote websocket connect failed, retrying");
+        if let Err(error) = &websocket {
+            log::warn!("Remote websocket start failed: {error}; retrying");
         }
         if let Ok(mut ws) = websocket {
             let started = Instant::now();
+            let mut connected = None;
             let mut registered = false;
             let mut remote_sessions = std::collections::BTreeSet::new();
             loop {
@@ -474,14 +555,27 @@ fn remote_loop(shared: Shared) {
                         .as_ref()
                         .is_some_and(|x| x.cloud_enabled && remote::same_connection(x, &c))
                 };
-                if !valid || !registered && started.elapsed() > Duration::from_secs(15) {
+                if !valid {
+                    break;
+                }
+                if !registered
+                    && connected.unwrap_or(started).elapsed()
+                        > Duration::from_secs(if connected.is_some() { 15 } else { 25 })
+                {
+                    log::warn!(
+                        "Remote {} timed out; retrying",
+                        if connected.is_some() {
+                            "registration"
+                        } else {
+                            "websocket connection"
+                        }
+                    );
                     break;
                 }
                 match rx.recv_timeout(Duration::from_secs(1)) {
-                    Ok(text) => {
-                        if text.is_empty() {
-                            break;
-                        }
+                    Ok(RemoteEvent::Connected) => connected = Some(Instant::now()),
+                    Ok(RemoteEvent::Disconnected) => break,
+                    Ok(RemoteEvent::Text(text)) => {
                         let Ok(v) = serde_json::from_str::<Value>(&text) else {
                             break;
                         };
@@ -491,6 +585,7 @@ fn remote_loop(shared: Shared) {
                             }
                             Some("registered") => {
                                 registered = true;
+                                log::info!("Remote registration successful");
                                 let mut d = shared.lock().unwrap();
                                 d.network.cloud = "connected".into();
                                 d.network.registered_name = v["name"].as_str().map(str::to_string);
@@ -534,10 +629,10 @@ fn remote_loop(shared: Shared) {
                             _ => None,
                         };
                         if let Some(reply) = reply {
-                            if ws
-                                .send(FrameType::Text(false), reply.to_string().as_bytes())
-                                .is_err()
+                            if let Err(error) =
+                                ws.send(FrameType::Text(false), reply.to_string().as_bytes())
                             {
+                                log::warn!("Remote websocket send failed: {error}");
                                 break;
                             }
                         }
@@ -722,6 +817,11 @@ pub fn run() -> Result<()> {
         .name("remote".into())
         .stack_size(32768)
         .spawn(move || remote_loop(remote_state))?;
+    let led_state = shared.clone();
+    std::thread::Builder::new()
+        .name("status-led".into())
+        .stack_size(4096)
+        .spawn(move || status_led_loop(led_state))?;
     let mut watchdog = TWDTDriver::new(
         peripherals.twdt,
         &WdtConfig {
