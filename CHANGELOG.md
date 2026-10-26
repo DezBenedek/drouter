@@ -31,6 +31,7 @@
 
 ## Unreleased
 
+- Keep the relay WebSocket alive with 30 s protocol pings so idle connections are not dropped by middleboxes.
 - Replace Pico with locally bundled Oat UI 1.0.0 in both interfaces; remove the Sass build step.
 - Rework mobile navigation, output cards, quick-source controls, grouped lists, full-screen source selection and bottom-sheet editors. Reduce repeated page and settings copy.
 - Use Sonner 2.0.8 for remote notifications with swipe dismissal and native-dialog support. Keep matching lightweight notifications on the embedded controller.

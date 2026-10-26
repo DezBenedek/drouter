@@ -504,7 +504,9 @@ fn remote_loop(shared: Shared) {
             buffer_size: MAX_MESSAGE,
             task_stack: 12288,
             network_timeout_ms: Duration::from_secs(20),
-            ping_interval_sec: Duration::from_secs(300),
+            // Frequent protocol pings keep NATs/proxies from killing the
+            // idle relay connection (the runtime answers them for free).
+            ping_interval_sec: Duration::from_secs(30),
             ..Default::default()
         };
         shared.lock().unwrap().network.cloud = "connecting".into();
