@@ -3,7 +3,7 @@
 Standalone Rust NDI routing controller **Waveshare ESP32-S3-ETH** boardra, opcionális Cloudflare távoli eléréssel.
 
 - Repo: [DezBenedek/drouter](https://github.com/DezBenedek/drouter)
-- Aktuális release: **v0.2.2** (lásd: [CHANGELOG](https://github.com/DezBenedek/drouter/blob/main/CHANGELOG.md))
+- Aktuális release: **v0.2.3** (lásd: [CHANGELOG](https://github.com/DezBenedek/drouter/blob/main/CHANGELOG.md))
 
 ## Oldalak
 
@@ -13,6 +13,6 @@ Standalone Rust NDI routing controller **Waveshare ESP32-S3-ETH** boardra, opcio
 - [[Tavoli-eleres]] – Cloudflare relay, regisztráció, diagnosztika
 - [[Kezelofelulet]] – routing táblázat, Wi-Fi és settings tudnivalók
 
-## ⚠️ Ismert hiba (v0.2.2)
+## Státusz
 
-**A távoli elérés (remote access) nem működik.** Az ESP32 nem tudja felépíteni a relay WebSocket kapcsolatot a `drouter.dezso.hu` felé (`websocket not connected` hurok az USB logban). Vizsgálat alatt. A helyi hálózat minden funkciója működik.
+**A távoli elérés v0.2.3 óta működik.** (v0.2.2-ben még törött volt a relay WebSocket handshake — részletek: [[Tavoli-eleres]].)
