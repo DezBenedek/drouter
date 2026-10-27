@@ -498,7 +498,7 @@ function Workspace({
               </section>
               <details className="settings-card">
                 <summary>Network</summary>
-                <SettingRow title="Connection">
+                <SettingRow title="Ethernet">
                   <Status online={data.network.ethernet.link}>
                     {data.network.ethernet.ip || "Disconnected"}
                   </Status>
@@ -680,6 +680,12 @@ function Workspace({
                     {data.info.server.replace(/^https?:\/\//, "")}
                   </a>
                 </SettingRow>
+                <SettingRow
+                  title="Custom server"
+                  detail="Server changes require local access"
+                >
+                  <span className="secondary">{data.info.server}</span>
+                </SettingRow>
                 <SettingRow title="Last connected">
                   <span className="secondary">
                     {relativeTime(data.network.last_cloud_connection)}
@@ -690,7 +696,7 @@ function Workspace({
                 <summary>Security</summary>
                 <SettingRow
                   title="Administrator password"
-                  detail="Stored and verified only on your DRouter"
+                  detail="Verified only on this device"
                 >
                   <Button onClick={password}>Change</Button>
                 </SettingRow>
@@ -718,6 +724,22 @@ function Workspace({
                     Revoke all
                   </Button>
                 </SettingRow>
+                <SettingRow
+                  title="Identity recovery"
+                  detail="Keep the file private. Requires local access."
+                >
+                  <Button disabled title="Requires local access">
+                    Export recovery file
+                  </Button>
+                </SettingRow>
+                <SettingRow
+                  title="Restore an identity"
+                  detail="Requires your recovery file and a new password. Requires local access."
+                >
+                  <Button disabled title="Requires local access">
+                    Restore…
+                  </Button>
+                </SettingRow>
               </details>
               <details className="settings-card">
                 <summary>System</summary>
@@ -739,6 +761,14 @@ function Workspace({
                 </SettingRow>
                 <SettingRow title="Recorded errors">
                   <span className="mono">{data.health.errors}</span>
+                </SettingRow>
+                <SettingRow
+                  title="Factory reset"
+                  detail="Export recovery first. Reserved names stay protected. Requires local access."
+                >
+                  <Button disabled title="Requires local access">
+                    Erase device…
+                  </Button>
                 </SettingRow>
               </details>
               <Button

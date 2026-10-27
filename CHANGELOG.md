@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5] - 2026-10-27
+
+### Fixed
+
+- Cloud settings match the firmware local UI: `Ethernet` label, read-only `Custom server` value, `Verified only on this device` wording, and disabled `Identity recovery` / `Restore an identity` / `Factory reset` rows noting `Requires local access` (these operations remain local-only on the device).
+- Verified the Access Control single-profile experience is shared by both interfaces via `firmware/web/shared/control.js`: header toggle switch, inline editor auto-opened for the first enabled profile, `Buttons` label in English and Hungarian.
+
 ## [0.2.4] - 2026-10-26
 
 ### Fixed
