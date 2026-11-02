@@ -45,7 +45,7 @@ let client,
   busy = false,
   message = "",
   failure = "";
-let dialog, dialogSubmit, controlCleanup, restrictedCleanup;
+let dialog, dialogSubmit, controlCleanup, restrictedCleanup, mountedPage = "";
 function closeDialog() {
   if (dialog) {
     dialog.close();
@@ -146,6 +146,7 @@ async function run(task, close = false) {
 }
 function logout(text = "", kind = "error") {
   page = "Routing";
+  mountedPage = "";
   dismissToast();
   settingsCleanup?.();
   settingsCleanup = null;
@@ -314,12 +315,29 @@ function closeSettingsDialog() {
 function ensureShell() {
   if (root.querySelector(".app-shell")) return;
   const { info: i } = data;
-  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1></div></header><div class="page-body" id="control-host"></div></main></div>`;
+  root.innerHTML = `<a class="skip-link" href="#main">Skip to content</a><div class="app-shell"><header class="app-topbar">${brand}<div class="app-device"><strong data-user-content>${esc(i.name)}</strong></div><div class="topbar-actions">${eventControl(i.event_mode)}${languageControl()}${button(icons.Settings + "<span>Settings</span>", "page", 'data-page="Settings" class="settings-trigger" aria-label="Settings"')}</div></header><main id="main" class="app-main"><header class="page-header"><div class="page-heading"><h1>Routing</h1><nav class="page-tabs" aria-label="Pages">${button("Routing", "page", 'data-page="Routing" data-page-tab="Routing" class="page-tab" aria-current="page"')}${button("Sources", "page", 'data-page="Sources" data-page-tab="Sources" class="page-tab"')}</nav></div></header><div class="page-body" id="control-host"></div></main></div>`;
+  showPage("Routing");
+}
+function showPage(next) {
+  page = next;
+  closeSettingsDialog();
+  const shell = root.querySelector(".app-shell");
+  if (!shell) return;
+  const heading = shell.querySelector(".page-heading h1");
+  if (heading) heading.textContent = next;
+  shell.querySelectorAll("[data-page-tab]").forEach((tab) => {
+    if (tab.dataset.pageTab === next) tab.setAttribute("aria-current", "page");
+    else tab.removeAttribute("aria-current");
+  });
+  if (mountedPage === next && shell.querySelector("#control-host")?.hasChildNodes())
+    return;
+  mountedPage = next;
+  window.scrollTo({ top: 0, behavior: "instant" });
   controlCleanup?.();
   controlCleanup = mountControl(
-    root.querySelector("#control-host"),
+    shell.querySelector("#control-host"),
     client,
-    "Routing",
+    next,
     async () => {
       data.info = await client.call("device.info");
     },
@@ -341,14 +359,12 @@ function renderSettingsDialog() {
     settingsDialog.addEventListener("cancel", (event) => {
       event.preventDefault();
       if (!busy) {
-        page = "Routing";
-        renderSettingsDialog();
+        showPage(mountedPage || "Routing");
       }
     });
     settingsDialog.addEventListener("click", (event) => {
       if (event.target === settingsDialog && !busy) {
-        page = "Routing";
-        renderSettingsDialog();
+        showPage(mountedPage || "Routing");
       }
     });
     if (!settingsDialog.open) settingsDialog.showModal();
@@ -447,8 +463,7 @@ async function action(d) {
   }
   if (d.action === "settings-close") {
     if (!busy) {
-      page = "Routing";
-      renderSettingsDialog();
+      showPage(mountedPage || "Routing");
     }
     return;
   }
@@ -458,6 +473,13 @@ async function action(d) {
   }
   if (d.action === "page") {
     if (busy) return;
+    if (d.page === "Routing" || d.page === "Sources") {
+      message = "";
+      failure = "";
+      showPage(d.page);
+      renderSettingsDialog();
+      return;
+    }
     page = d.page;
     window.scrollTo({ top: 0, behavior: "instant" });
     message = "";

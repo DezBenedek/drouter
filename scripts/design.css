@@ -359,6 +359,37 @@ small,
   justify-content: space-between;
   margin-bottom: 28px;
 }
+.page-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+.page-heading h1 {
+  margin: 0;
+}
+.page-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 3px;
+  border: 1px solid #343a42;
+  border-radius: 10px;
+  background: #171a1e;
+}
+button.page-tab {
+  min-height: 34px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #aebbd0;
+  font-size: 13px;
+}
+button.page-tab[aria-current="page"] {
+  background: #25354b;
+  color: #fff;
+  box-shadow: inset 0 -2px #9bbbea;
+}
 
 .page-body {
   min-width: 0;
@@ -410,6 +441,9 @@ small,
   overflow: auto;
   max-height: calc(100dvh - 310px);
   overscroll-behavior: contain;
+  /* Keep touch panning enabled on the scroll region itself: tapping the
+     table must still scroll the matrix vertically on mobile. */
+  touch-action: pan-x pan-y;
   scrollbar-color: #4b535e #171a1e;
   scrollbar-width: thin;
 }
@@ -1516,6 +1550,10 @@ summary::after {
   .page-header {
     margin-bottom: 22px;
   }
+  .page-heading {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
   h1 {
     font-size: 26px;
   }
@@ -1593,6 +1631,8 @@ summary::after {
   .matrix-scroll {
     max-height: 65dvh;
     overflow-x: hidden;
+    overflow-y: auto;
+    touch-action: pan-x pan-y;
   }
   .route-table {
     table-layout: fixed;

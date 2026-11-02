@@ -470,10 +470,22 @@ function Workspace({
       <main id="main" className="app-main">
         <header className="page-header">
           <div className="page-heading">
-            <h1>Routing</h1>
+            <h1>{page === "Settings" ? "Routing" : page}</h1>
+            <nav className="page-tabs" aria-label="Pages">
+              {(["Routing", "Sources"] as const).map((tab) => (
+                <Button
+                  key={tab}
+                  className="page-tab"
+                  aria-current={page === tab ? "page" : undefined}
+                  onClick={() => setPage(tab)}
+                >
+                  {tab}
+                </Button>
+              ))}
+            </nav>
           </div>
         </header>
-        <SharedControl client={client} page="Routing" />
+        <SharedControl client={client} page={page === "Settings" ? "Routing" : page} />
         {page === "Settings" && (
           <Modal
             title="Settings"
@@ -841,7 +853,10 @@ function SharedControl({
   page: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => mountControl(ref.current!, client, page), [client, page]);
+  useEffect(() => {
+    const dispose = mountControl(ref.current!, client, page);
+    return () => dispose();
+  }, [client, page]);
   return <div className="page-body" ref={ref} />;
 }
 function SimpleScreen({

@@ -1128,6 +1128,108 @@ fn birddog_reset_clears_device_cache_and_preserves_saved_configuration() {
     .unwrap();
     assert!(calls.lock().unwrap().iter().any(|c| c == "POST /restart"));
 }
+struct ResetDecoder {
+    calls: Arc<Mutex<Vec<String>>>,
+}
+impl BirdDog for ResetDecoder {
+    fn request(
+        &mut self,
+        _: &Receiver,
+        method: &str,
+        path: &str,
+        _: Option<Value>,
+    ) -> Result<Value> {
+        self.calls.lock().unwrap().push(format!("{method} {path}"));
+        match path {
+            "/about" => Ok(json!({"FirmwareVersion":"BirdDog reset","HostName":"bird-reset"})),
+            "/reset" => Ok(json!({})),
+            // The finder cache no longer advertises the routed source.
+            "/List" => Ok(json!({"Visible":"192.168.1.60"})),
+            "/refresh" => Ok(json!({})),
+            p if p.starts_with("/connectTo") => Ok(json!({"sourceName":"Ghost Camera"})),
+            _ => bail!("Unsupported endpoint"),
+        }
+    }
+}
+#[test]
+fn sources_reset_keeps_active_routes_and_refresh_never_resets() {
+    let (_, store) = device();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let mut d = Device::new(
+        Box::new(store),
+        Box::new(ResetDecoder {
+            calls: calls.clone(),
+        }),
+        true,
+    )
+    .unwrap();
+    confirmed(
+        &mut d,
+        "sources.saved.add",
+        json!({"source":"Visible","display_name":"Visible"}),
+    )
+    .unwrap();
+    // Plain refresh must not touch the finder cache, but still reports
+    // the actively routed source missing from the advertised lists.
+    let reloaded = call(&mut d, "sources.refresh", json!({})).unwrap();
+    assert_eq!(reloaded["reset"], false);
+    assert_eq!(
+        reloaded["kept"],
+        json!([{"receiver":"one","source":"Ghost Camera"}])
+    );
+    assert!(!calls.lock().unwrap().iter().any(|c| c == "POST /reset"));
+    assert!(call(&mut d, "sources.list", json!({})).unwrap()["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["name"] == "Visible"));
+    // Full reset clears the cache but keeps the actively routed source,
+    // even though /List no longer advertises it.
+    let reset = call(&mut d, "sources.reset", json!({})).unwrap();
+    assert_eq!(reset["reset"], true);
+    let names: Vec<&str> = reset["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"Visible"));
+    assert!(names.contains(&"Ghost Camera"));
+    assert_eq!(
+        reset["kept"],
+        json!([{"receiver":"one","source":"Ghost Camera"}])
+    );
+    assert!(calls.lock().unwrap().iter().any(|c| c == "POST /reset"));
+    // Saved availability follows the complete picture.
+    let saved = &d.config.as_ref().unwrap().saved_sources;
+    assert!(
+        saved
+            .iter()
+            .find(|s| s.source == "Visible")
+            .unwrap()
+            .available
+    );
+}
+#[test]
+fn sources_refresh_with_offline_receivers_keeps_previous_availability() {
+    let (mut d, _) = device();
+    confirmed(
+        &mut d,
+        "sources.saved.add",
+        json!({"source":"Camera A","display_name":"Teacher"}),
+    )
+    .unwrap();
+    d.api = Box::new(Decoder {
+        active: "Camera A".into(),
+        ignore: false,
+        online: false,
+    });
+    let reloaded = call(&mut d, "sources.refresh", json!({})).unwrap();
+    assert_eq!(reloaded["errors"].as_array().unwrap().len(), 1);
+    assert!(reloaded["sources"].as_array().unwrap().is_empty());
+    // No complete picture: the previously available flag must survive.
+    assert!(d.config.as_ref().unwrap().saved_sources[0].available);
+}
 #[test]
 fn birddog_encoder_management_does_not_require_decoder_readback_and_restricts_roles() {
     let (_, store) = device();

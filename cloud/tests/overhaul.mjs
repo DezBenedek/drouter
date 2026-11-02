@@ -194,7 +194,7 @@ export async function checkOverhaul({
       await fault({ receiver: 0, active: "None" });
       await p
         .locator(".other-source")
-        .getByRole("button", { name: "NDI list reset", exact: true })
+        .getByRole("button", { name: "Reload NDI lists", exact: true })
         .click();
       await p.waitForFunction(
         () =>
@@ -229,10 +229,34 @@ export async function checkOverhaul({
           (s) => s.name === "Old NDI entry",
         ),
       );
+      // Reload must NOT touch the BirdDog finder cache: it re-reads every
+      // receiver list, while Full reset (Sources page) clears stale entries
+      // and keeps actively routed sources.
       await p
         .locator(".other-source")
-        .getByRole("button", { name: "NDI list reset", exact: true })
+        .getByRole("button", { name: "Reload NDI lists", exact: true })
         .click();
+      await p.waitForFunction(
+        () =>
+          document.querySelector(".activity-bar [data-activity-host]")?.dataset
+            .kind === "done",
+      );
+      await p.waitForFunction(
+        () => !document.querySelector(".crosspoint:disabled"),
+      );
+      assert(
+        (await admin.call("sources.list")).sources.some(
+          (s) => s.name === "Old NDI entry",
+        ),
+        "Reload must preserve the finder cache",
+      );
+      const activeBeforeReset = (await admin.call("receivers.list"))[0].state
+        .source;
+      await p.getByRole("button", { name: "Sources", exact: true }).click();
+      await p
+        .getByRole("button", { name: "Full reset", exact: true })
+        .click();
+      await p.getByRole("button", { name: "Confirm", exact: true }).click();
       await p.waitForFunction(
         () =>
           document.querySelector(".activity-bar [data-activity-host]")?.dataset
@@ -246,7 +270,18 @@ export async function checkOverhaul({
           (s) => s.name.includes("old entry") || s.name === "Old NDI entry",
         ),
       );
-      assert((await p.locator(".activity-bar").innerText()).includes("(2/2)"));
+      assert(
+        (await admin.call("sources.list")).sources.some(
+          (s) => s.name === activeBeforeReset,
+        ),
+        "Full reset must keep actively routed sources",
+      );
+      assert.equal(
+        (await admin.call("receivers.list"))[0].state.source,
+        activeBeforeReset,
+        "Full reset must not disturb the active route",
+      );
+      await p.getByRole("button", { name: "Routing", exact: true }).click();
       assert.equal(
         await p
           .locator(".device-name-button, .source-device-button, .bird-manager")

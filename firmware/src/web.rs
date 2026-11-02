@@ -807,13 +807,33 @@ impl Device {
                 self.commit(c)?;
                 Ok(json!({"removed":true}))
             }
-            "sources.list" | "sources.refresh" => {
+            "sources.list" | "sources.refresh" | "sources.reset" => {
                 let _: Empty = parse(p)?;
-                let refresh = r.op == "sources.refresh";
+                // Full reset clears every BirdDog finder cache (POST /reset).
+                // Plain list/refresh never reset: refresh only re-reads the
+                // lists (POST /refresh retains cached entries).
+                let reset = r.op == "sources.reset";
+                let refresh = reset || r.op == "sources.refresh";
+                // Snapshot the currently routed sources BEFORE resetting, so a
+                // destructive reset can never drop them from the results.
+                let mut actives: Vec<(String, String)> = Vec::new();
+                for receiver in &c.receivers {
+                    match self.api.active(receiver) {
+                        Ok(source) if !source.is_empty() => {
+                            actives.push((receiver.id.clone(), source))
+                        }
+                        _ => {}
+                    }
+                }
                 let mut sources = Vec::new();
                 let mut errors = Vec::new();
                 for receiver in &c.receivers {
-                    match self.api.sources(receiver, refresh) {
+                    let found = if reset {
+                        self.api.reset_sources(receiver)
+                    } else {
+                        self.api.sources(receiver, refresh)
+                    };
+                    match found {
                         Ok(found) => {
                             for source in found {
                                 if !sources.iter().any(|existing: &crate::bird_dog::Source| {
@@ -831,13 +851,44 @@ impl Device {
                         }
                     }
                 }
+                // Re-add active routes missing from the post-reset lists.
+                // A BirdDog keeps decoding its current source even when the
+                // finder cache no longer advertises it.
+                let mut kept = Vec::new();
+                for (receiver, name) in &actives {
+                    if !sources
+                        .iter()
+                        .any(|s: &crate::bird_dog::Source| &s.name == name)
+                    {
+                        if sources.len() >= MAX_SOURCES {
+                            bail!("Source capacity exceeded");
+                        }
+                        sources.push(crate::bird_dog::Source {
+                            name: name.clone(),
+                            ip: None,
+                        });
+                        kept.push(json!({"receiver":receiver,"source":name}));
+                    }
+                }
+                sources.sort_by(|a: &crate::bird_dog::Source, b: &crate::bird_dog::Source| {
+                    a.name.cmp(&b.name)
+                });
                 if refresh {
+                    // Only flip saved availability on a complete picture: with
+                    // unreachable receivers, keep the previous flags instead
+                    // of wrongly marking their sources unavailable.
+                    let complete = errors.is_empty();
                     for saved in &mut c.saved_sources {
-                        saved.available = sources.iter().any(|s| s.name == saved.source);
+                        let present = sources.iter().any(|s| s.name == saved.source);
+                        if present {
+                            saved.available = true;
+                        } else if complete {
+                            saved.available = false;
+                        }
                     }
                     self.commit(c)?;
                 }
-                Ok(json!({"sources":sources,"errors":errors}))
+                Ok(json!({"sources":sources,"errors":errors,"kept":kept,"reset":reset}))
             }
             "route.get" => {
                 let _: Empty = parse(p)?;

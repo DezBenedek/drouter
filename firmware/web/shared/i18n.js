@@ -1199,6 +1199,16 @@ Object.assign(dictionaries.hu, {
   "Settings sections": "Beállítási kategóriák",
   "BirdDog device manager": "BirdDog eszközkezelő",
   "NDI list reset": "NDI-lista reset",
+  "Reload NDI lists": "NDI-listák újratöltése",
+  "Full reset": "Teljes reset",
+  "Reading device lists": "Eszközlisták lekérése",
+  "NDI source lists reloaded": "NDI-forráslisták újratöltve",
+  "Clearing finder caches and rediscovering sources":
+    "Kereső-gyorsítótárak ürítése és források újrakeresése",
+  "Active NDI source lists loaded, active routes kept":
+    "Az aktív NDI-források listája betöltve, az aktív kapcsolatok megmaradtak",
+  "Clear every BirdDog finder cache and rediscover all sources? Active routes are kept in the list.":
+    "Üríti az összes BirdDog kereső-gyorsítótárát és újrakeresi a forrásokat? Az aktív kapcsolatok megmaradnak a listában.",
   "Clearing cached sources and discovering active NDI sources":
     "Lista ürítése és az aktív NDI-források lekérése",
   "Active NDI source lists loaded": "Az aktív NDI-források listája betöltve",

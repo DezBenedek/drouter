@@ -396,38 +396,67 @@ export function installSettingsSidebar(dialog, client) {
   localize(nav);
   return () => nav.remove();
 }
-export async function resetNdiLists(client, receiver = null) {
-  const task = beginTask("NDI list reset");
-  task.step(0, t("Reading device list"));
-  const devices = receiver
-    ? [receiver]
-    : (
-        await client.call("receivers.list").catch((error) => {
-          task.fail(t(error.message));
-          throw error;
-        })
-      ).map((r) => r.config);
-  task.setTotal(devices.length);
-  const errors = [];
-  for (let i = 0; i < devices.length; i++) {
-    const device = devices[i];
-    task.step(
-      i + 1,
-      `${device.label} · ${t("Clearing cached sources and discovering active NDI sources")}`,
-    );
-    try {
-      await client.call("birddog.sources.reset", { id: device.id });
-    } catch (error) {
-      errors.push(`${device.label}: ${t(error.message)}`);
+export async function reloadNdiLists(client) {
+  const task = beginTask("Reload NDI lists");
+  task.step(0, t("Reading device lists"));
+  try {
+    const result = await client.call("sources.refresh").catch((error) => {
+      task.fail(t(error.message));
+      throw error;
+    });
+    const count = result?.sources?.length ?? 0;
+    const failed = result?.errors?.length ?? 0;
+    controlsChanged(client);
+    if (failed) {
+      const detail = result.errors
+        .map((e) => `${e.receiver}: ${e.message}`)
+        .join(" · ");
+      task.fail(detail);
+      toast(detail, "error");
+    } else {
+      task.done(t("NDI source lists reloaded"));
+      toast(`NDI source lists reloaded (${count})`, "success");
     }
+    return result;
+  } catch (error) {
+    controlsChanged(client);
+    throw error;
   }
-  controlsChanged(client);
-  if (errors.length) {
-    task.fail(errors.join(" · "));
-    toast(errors.join("\n"), "error");
-  } else {
-    task.done(t("Active NDI source lists loaded"));
-    toast("Active NDI source lists loaded", "success");
+}
+export async function resetNdiLists(client) {
+  const task = beginTask("Full reset");
+  task.step(0, t("Clearing finder caches and rediscovering sources"));
+  try {
+    const result = await client.call("sources.reset").catch((error) => {
+      task.fail(t(error.message));
+      throw error;
+    });
+    const kept = result?.kept?.length ?? 0;
+    const failed = result?.errors?.length ?? 0;
+    controlsChanged(client);
+    if (failed) {
+      const detail = result.errors
+        .map((e) => `${e.receiver}: ${e.message}`)
+        .join(" · ");
+      task.fail(detail);
+      toast(detail, "error");
+    } else {
+      task.done(
+        kept
+          ? t("Active NDI source lists loaded, active routes kept")
+          : t("Active NDI source lists loaded"),
+      );
+      toast(
+        kept
+          ? `Active NDI source lists loaded (${kept} active kept)`
+          : "Active NDI source lists loaded",
+        "success",
+      );
+    }
+    return result;
+  } catch (error) {
+    controlsChanged(client);
+    throw error;
   }
 }
 export async function autoFix(client, actions = null) {
@@ -1181,6 +1210,24 @@ export function mountControl(host, client, page, changed = () => {}) {
         working = true;
         render();
         try {
+          await reloadNdiLists(client);
+          await refreshAfterChange();
+        } finally {
+          working = false;
+          render();
+        }
+      }
+      if (action === "full-reset") {
+        const ok = await confirmChange(
+          "Full reset",
+          "Clear every BirdDog finder cache and rediscover all sources? Active routes are kept in the list.",
+          async () => {},
+        );
+        if (!ok) return;
+        routeVersion += 1;
+        working = true;
+        render();
+        try {
           await resetNdiLists(client);
           await refreshAfterChange();
         } finally {
@@ -1718,7 +1765,7 @@ function controlMarkup(data, page, state) {
       `${s.display_name || ""} ${s.source || s.name}`
         .toLowerCase()
         .includes(sourceSearch.toLowerCase());
-    return `<div class="routing-tools">${searchInput("Search sources", "source", sourceSearch)}${b("Save source", "source-add", 'class="primary"')}${b("Refresh sources", "refresh", working ? "disabled" : "")}</div><h2 class="list-section-title">${t("Saved sources")}</h2><div class="data-list source-list-management">${
+    return `<div class="routing-tools">${searchInput("Search sources", "source", sourceSearch)}${b("Save source", "source-add", 'class="primary"')}${b("Refresh sources", "refresh", working ? "disabled" : "")}${b("Full reset", "full-reset", working ? "disabled" : "")}</div><h2 class="list-section-title">${t("Saved sources")}</h2><div class="data-list source-list-management">${
       data.saved
         .filter(matches)
         .map((s) => {
@@ -1808,5 +1855,5 @@ function controlMarkup(data, page, state) {
     : !saved.length
       ? `<tr class="matrix-empty-row" data-key="empty-sources"><td colspan="${receivers.length + 1}"><p>${t(data.saved.length ? "No matching sources" : "No saved sources")}</p>${data.saved.length ? "" : b("+ Add source", "source-add", 'class="quiet"')}</td></tr>`
       : "";
-  return `<div class="routing-console"><div class="routing-tools">${searchInput("Find a source", "source", sourceSearch)}${searchInput("Find an output", "output", search)}<div class="routing-tool-actions">${b(arranging ? "Done" : "Reorder", "arrange", `class="${arranging ? "primary" : ""}" aria-pressed="${arranging}"`)}${b("Auto bugfix", "autofix", working ? "disabled" : "")}</div></div>${receiverTabs}<div class="matrix-frame"><div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><caption class="sr-only">${t("Transmitters are rows. Receivers are columns. Select a cell to switch.")}</caption><thead><tr><th scope="col" class="matrix-corner"><span>${t("Receiver")} <span aria-hidden="true">→</span></span><strong>${t("Transmitter")} <span aria-hidden="true">↓</span></strong></th>${receivers.map((r, col) => `<th scope="col" data-key="receiver-${e(r.config.id)}" class="receiver-column ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}><div class="receiver-header"><strong class="receiver-name" data-user-content>${e(r.config.label)}</strong>${edit("Edit receiver", "receiver-edit", r.config.id)}</div><span class="receiver-state"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span><div class="output-source"><small>${t(r.state.online ? "Current source" : "Last known")}</small><span data-user-content>${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}</span></div>${receiverOrder(r)}</th>`).join("")}</tr></thead><tbody>${saved.map((source, row) => `<tr class="source-row" data-key="source-${e(source.id)}"><th scope="row"><div class="source-header"><span class="matrix-index" aria-hidden="true">${String(data.saved.indexOf(source) + 1).padStart(2, "0")}</span><div class="source-identity"><strong data-user-content>${e(source.display_name)}</strong>${source.display_name !== source.source ? `<small title="${e(source.source)}" data-user-content>${e(source.source)}</small>` : ""}${data.sources.some((s) => s.name === source.source) ? "" : `<small class="unavailable-source">${t("Unavailable")}</small>`}</div>${edit("Edit source", "source-edit", source.id)}</div>${sourceOrder(source)}</th>${receivers.map((r, col) => `<td data-key="route-${e(r.config.id)}" class="route-cell ${r.state.source === source.source ? "route-active" : ""} ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}>${routeButton(r, source, row, col)}</td>`).join("")}</tr>`).join("")}${receivers.length ? emptyState : ""}<tr class="other-source" data-key="other-sources"><th scope="row"><strong>${t("Other device")}</strong><small>${t("All NDI sources")}</small>${b("NDI list reset", "ndi-reset", `class="quiet ndi-reset-button" ${working ? "disabled" : ""}`)}</th>${receivers.map((r, col) => `<td data-key="other-${e(r.config.id)}" data-route-col="${col}" ${mobile(r)} class="${currentSource(r) && !data.saved.some((source) => source.source === currentSource(r)) ? "other-active" : ""}">${sourceSelect(r)}</td>`).join("")}</tr></tbody></table>${receivers.length ? "" : emptyState}</div><div class="matrix-bottom"><div class="matrix-add-actions">${b("+ Add source", "source-add")}${b("+ Add device", "receiver-add")}</div><span class="matrix-hint"><span class="legend-active" aria-hidden="true">${check}</span>${t("Verified active source")}</span></div></div></div>`;
+  return `<div class="routing-console"><div class="routing-tools">${searchInput("Find a source", "source", sourceSearch)}${searchInput("Find an output", "output", search)}<div class="routing-tool-actions">${b(arranging ? "Done" : "Reorder", "arrange", `class="${arranging ? "primary" : ""}" aria-pressed="${arranging}"`)}${b("Auto bugfix", "autofix", working ? "disabled" : "")}</div></div>${receiverTabs}<div class="matrix-frame"><div class="matrix-scroll" role="region" aria-label="${t("Routing matrix")}" tabindex="0"><table class="route-table"><caption class="sr-only">${t("Transmitters are rows. Receivers are columns. Select a cell to switch.")}</caption><thead><tr><th scope="col" class="matrix-corner"><span>${t("Receiver")} <span aria-hidden="true">→</span></span><strong>${t("Transmitter")} <span aria-hidden="true">↓</span></strong></th>${receivers.map((r, col) => `<th scope="col" data-key="receiver-${e(r.config.id)}" class="receiver-column ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}><div class="receiver-header"><strong class="receiver-name" data-user-content>${e(r.config.label)}</strong>${edit("Edit receiver", "receiver-edit", r.config.id)}</div><span class="receiver-state"><span class="status-dot ${r.state.online ? "" : "offline"}"></span>${t(r.state.online ? "Online" : "Offline")}</span><div class="output-source"><small>${t(r.state.online ? "Current source" : "Last known")}</small><span data-user-content>${e(currentSource(r) ? labelFor(data, currentSource(r)) : t("No source"))}</span></div>${receiverOrder(r)}</th>`).join("")}</tr></thead><tbody>${saved.map((source, row) => `<tr class="source-row" data-key="source-${e(source.id)}"><th scope="row"><div class="source-header"><span class="matrix-index" aria-hidden="true">${String(data.saved.indexOf(source) + 1).padStart(2, "0")}</span><div class="source-identity"><strong data-user-content>${e(source.display_name)}</strong>${source.display_name !== source.source ? `<small title="${e(source.source)}" data-user-content>${e(source.source)}</small>` : ""}${data.sources.some((s) => s.name === source.source) ? "" : `<small class="unavailable-source">${t("Unavailable")}</small>`}</div>${edit("Edit source", "source-edit", source.id)}</div>${sourceOrder(source)}</th>${receivers.map((r, col) => `<td data-key="route-${e(r.config.id)}" class="route-cell ${r.state.source === source.source ? "route-active" : ""} ${r.state.online ? "" : "receiver-offline"}" data-route-col="${col}" ${mobile(r)}>${routeButton(r, source, row, col)}</td>`).join("")}</tr>`).join("")}${receivers.length ? emptyState : ""}<tr class="other-source" data-key="other-sources"><th scope="row"><strong>${t("Other device")}</strong><small>${t("All NDI sources")}</small>${b("Reload NDI lists", "ndi-reset", `class="quiet ndi-reset-button" ${working ? "disabled" : ""}`)}</th>${receivers.map((r, col) => `<td data-key="other-${e(r.config.id)}" data-route-col="${col}" ${mobile(r)} class="${currentSource(r) && !data.saved.some((source) => source.source === currentSource(r)) ? "other-active" : ""}">${sourceSelect(r)}</td>`).join("")}</tr></tbody></table>${receivers.length ? "" : emptyState}</div><div class="matrix-bottom"><div class="matrix-add-actions">${b("+ Add source", "source-add")}${b("+ Add device", "receiver-add")}</div><span class="matrix-hint"><span class="legend-active" aria-hidden="true">${check}</span>${t("Verified active source")}</span></div></div></div>`;
 }
